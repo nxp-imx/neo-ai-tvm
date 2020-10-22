@@ -26,6 +26,7 @@ import tvm.relay.transform
 from tvm import relay
 from tvm import runtime
 from tvm.contrib import util
+from tvm import rpc
 
 
 def check_result(mod, map_inputs, out_shape, result, tol=1e-5, target="llvm", ctx=tvm.cpu()):
@@ -77,6 +78,51 @@ def check_result(mod, map_inputs, out_shape, result, tol=1e-5, target="llvm", ct
     check_vm_result()
     check_graph_runtime_result()
 
+def check_rpc_result(mod, map_inputs, out_shape, result, tol=1e-5, target="llvm -mtriple=aarch64-linux-gnu"):
+    if sys.platform == "win32":
+        print("Skip test on Windows for now")
+        return
+    tmp_path = util.tempdir()
+
+    def update_lib(lib):
+        test_dir = os.path.dirname(os.path.realpath(os.path.expanduser(__file__)))
+        source_dir = os.path.join(test_dir, "..", "..", "..")
+        contrib_path = os.path.join(source_dir, "src", "runtime", "contrib")
+
+        kwargs = {}
+        kwargs["options"] = ["-O2", "-std=c++14", "-I" + contrib_path]
+        kwargs["cc"] = "aarch64-linux-gnu-g++"
+        lib_name = "lib.so"
+        lib_path = tmp_path.relpath(lib_name)
+        lib.export_library(lib_path, fcompile=False, **kwargs)
+
+        return lib_path
+
+    def check_rpc_graph_runtime_result():
+        with tvm.transform.PassContext(opt_level=3, disabled_pass=["AlterOpLayout"]):
+            json, lib, _ = relay.build(mod, target=target)
+        lib_path = update_lib(lib)
+
+        host = "10.193.20.58"
+        port = 9090
+        remote = rpc.connect(host, port)
+        remote.upload(lib_path)
+        lib = remote.load_module("lib.so")
+        ctx = remote.cpu()
+
+        rt_mod = tvm.contrib.graph_runtime.create(json, lib, ctx)
+
+        for name, data in map_inputs.items():
+            rt_mod.set_input(name, data)
+        rt_mod.run()
+        out = tvm.nd.empty(out_shape, ctx=ctx)
+        out = rt_mod.get_output(0, out)
+
+        tvm.testing.assert_allclose(out.asnumpy(), result, rtol=tol, atol=tol)
+
+    check_rpc_graph_runtime_result()
+
+
 def set_external_func_attr(func, compiler, ext_symbol):
     func = func.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
     func = func.with_attr("Compiler", compiler)
@@ -113,7 +159,8 @@ def test_vsi_codegen():
 
     ref_ex = relay.create_executor("graph", mod=ref_mod, ctx=tvm.cpu())
     ref_res = ref_ex.evaluate()(l_data, r_data)
-    check_result(
+
+    check_rpc_result(
         mod, {"x": l_data, "y": r_data}, (1, 32, 14, 14), ref_res.asnumpy(), tol=1e-5
     )
 

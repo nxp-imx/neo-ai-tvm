@@ -33,8 +33,8 @@ namespace runtime {
 namespace contrib {
 
 
-extern "C" TVM_DLL void vsi_npu_add(float* data, ...);
-
+//extern "C" TVM_DLL void vsi_npu_add(float* data, ...);
+extern "C" TVM_DLL void vsi_npu_add(float* data1, float* data2, float* out, int n, int c, int h, int w);
 }  // namespace contrib
 }  // namespace runtime
 }  // namespace tvm
