@@ -21,6 +21,7 @@ if((USE_VSI_NPU STREQUAL "ON") OR (USE_VSI_NPU STREQUAL "JSON"))
 	message(STATUS "Build with VSI NPU support ...")
 
 if(USE_VSI_NPU_RUNTIME)
+	list(APPEND TVM_RUNTIME_LINKER_LIBS ovxlib ovxlibxx)
 	add_definitions(-DUSE_VSI_NPU_RUNTIME=1)
 endif(USE_VSI_NPU_RUNTIME)
 	file(GLOB VSI_NPU_CONTRIB_SRC src/runtime/contrib/vsi_npu/vsi_npu_json.cc)

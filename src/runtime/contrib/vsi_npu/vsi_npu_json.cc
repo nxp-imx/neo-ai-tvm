@@ -32,6 +32,15 @@
 #include "../json/json_node.h"
 #include "../json/json_runtime.h"
 
+#ifdef USE_VSI_NPU_RUNTIME
+#include "ovxlibxx/context.h"
+#include "ovxlibxx/graph.h"
+#include "ovxlibxx/tensor.h"
+#include "ovxlibxx/operation.h"
+#include "ovxlibxx/operations/fullyconnected.h"
+#include "ovxlibxx/operations/activations.h"
+#endif
+
 namespace tvm {
 namespace runtime {
 namespace contrib {
@@ -39,10 +48,47 @@ namespace contrib {
 using namespace tvm::runtime;
 using namespace tvm::runtime::json;
 
-class DummyJSONRuntime : public JSONRuntimeBase {
+#ifdef USE_VSI_NPU_RUNTIME
+
+class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
  public:
-  DummyJSONRuntime(const std::string& symbol_name, const std::string& graph_json,
+  VsiNpuJSONRuntime(const std::string& symbol_name, const std::string& graph_json,
+                  const Array<String> const_names)
+      : JSONRuntimeBase(symbol_name, graph_json, const_names) {}
+
+  const char* type_key() const { return "vsi_npu_json"; }
+
+  void Init(const Array<NDArray>& consts) override {
+    BuildEngine();
+
+    CHECK_EQ(consts.size(), const_idx_.size())
+        << "The number of input constants must match the number of required.";
+
+    // Setup constants entries for weights.
+    SetupConstants(consts);
+  }
+
+  void Run() override {
+  }
+ private:
+
+  void BuildEngine() {
+    context_ = vsi::Context::Create();
+    graph_ = context_->CreateGraph();
+    std::cout << "Pass" << std::endl;
+  }
+
+  std::shared_ptr<vsi::Context> context_;
+  std::shared_ptr<vsi::Graph> graph_;
+};
+
+#else
+
+class VsiNpuJSONRuntime : public JSONRuntimeBase {
+
+ public:
+  VsiNpuJSONRuntime(const std::string& symbol_name, const std::string& graph_json,
                   const Array<String> const_names)
       : JSONRuntimeBase(symbol_name, graph_json, const_names) {}
 
@@ -54,14 +100,13 @@ class DummyJSONRuntime : public JSONRuntimeBase {
   void Run() override {
   }
 };
+#endif
+
+
 
 runtime::Module VsiNpuJSONRuntimeCreate(String symbol_name, String graph_json,
                                       const Array<String>& const_names) {
-#ifdef USE_VSI_NPU_RUNTIME
   auto n = make_object<VsiNpuJSONRuntime>(symbol_name, graph_json, const_names);
-#else
-  auto n = make_object<DummyJSONRuntime>(symbol_name, graph_json, const_names);
-#endif
   return runtime::Module(n);
 }
 

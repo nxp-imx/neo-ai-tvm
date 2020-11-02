@@ -33,8 +33,10 @@ it is supported. For example:
 check the attributes of the op and decide if it should be offloaded to vsiNPU.
 """
 import tvm.ir
-from ...dataflow_pattern import wildcard, is_op
+from ...dataflow_pattern import wildcard, is_op, is_constant
 from .register import register_pattern_table
+from tvm.relay.build_module import bind_params_by_name
+from tvm.relay import transform
 
 
 def _register_external_op_helper(op_name, supported=True):
@@ -61,7 +63,58 @@ def _register_external_op_helper(op_name, supported=True):
 
 _register_external_op_helper("add")
 _register_external_op_helper("nn.batch_flatten")
-_register_external_op_helper("nn.bias_add")
-_register_external_op_helper("nn.dense")
+#_register_external_op_helper("nn.bias_add")
+#_register_external_op_helper("nn.dense")
 _register_external_op_helper("nn.relu")
 _register_external_op_helper("nn.softmax")
+
+
+@register_pattern_table("vsi_npu")
+def vsi_npu_pattern_table():
+    """Get the VSI NPU pattern table."""
+
+    def dense_pattern():
+        """Create a dense (fully-connected) pattern.
+
+        Returns
+        -------
+        pattern : dataflow_pattern.AltPattern
+            Denotes the convolution pattern.
+        """
+        pattern = is_op("nn.dense")(wildcard(), is_constant())
+        pattern = pattern.optional(lambda x: is_op("nn.bias_add")(x, is_constant()))
+        return pattern
+
+    vsi_npu_patterns = [
+            ("vsi_npu.dense", dense_pattern()),
+            ]
+    return vsi_npu_patterns
+
+def partition_for_vsi_npu(mod, params=None):
+    """Partition the graph greedily offloading supported
+    operators to VSI NPU.
+
+    Parameters
+    ----------
+    mod : Module
+        The module to run passes on.
+    params : Optional[Dict[str, NDArray]]
+        Constant input parameters.
+
+    Returns
+    -------
+    ret : annotated and partitioned module.
+    """
+    if params:
+        mod["main"] = bind_params_by_name(mod["main"], params)
+
+    seq = tvm.transform.Sequential(
+        [
+            transform.MergeComposite(vsi_npu_pattern_table()),
+            transform.AnnotateTarget("vsi_npu"),
+            transform.MergeCompilerRegions(),
+            transform.PartitionGraph(),
+        ]
+    )
+
+    return seq(mod)
