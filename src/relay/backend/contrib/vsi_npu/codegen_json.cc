@@ -49,9 +49,21 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
   using JSONGraphNodeEntry = tvm::runtime::json::JSONGraphNodeEntry;
 
  public:
+  /*!
+   * \brief A series of operators that form a composite
+   * dense layer. Supports both nn.dense and qnn.dense.
+   */
+  struct CompositeDenseNode {
+    const CallNode* dense = nullptr;
+    const CallNode* bias = nullptr;
+    const CallNode* requantize = nullptr;
+  };
+
   VsiNpuJSONSerializer(const std::string& symbol, const Expr& expr) : JSONSerializer(symbol, expr) {}
 
   std::vector<JSONGraphNodeEntry> VisitExpr_(const CallNode* cn) override {
+
+#if 0
     Expr expr = GetRef<Expr>(cn);
     std::string name;
     const CallNode* call = cn;
@@ -82,7 +94,87 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
                                                 inputs, 1 /* num_outputs_ */);
     SetCallNodeAttribute(node, call);
     return AddNode(node, GetRef<Expr>(cn));
+#else
+    if (cn->op.as<OpNode>()) {
+      return JSONSerializer::VisitExpr_(cn);
+    }
+    if (!cn->op.as<FunctionNode>()) {
+      LOG(FATAL) << "VSI NPU JSON runtime does not support calls to "
+                 << cn->op->GetTypeKey();
+    }
+    auto fn = cn->op.as<FunctionNode>();
+    auto comp = fn->GetAttr<String>(attr::kComposite);
+    CHECK(comp.defined()) << "VSI NPU JSON runtime only supports composite functions.";
+    const std::string name = comp.value();
+    std::shared_ptr<JSONGraphNode> json_node;
+    if (name == "vsi_npu.dense") {
+      json_node = CreateCompositeDenseJSONNode(cn);
+    } else {
+      LOG(FATAL) << "Unrecognized VSI NPU pattern: " << name;
+    }
+    return AddNode(json_node, GetRef<Expr>(cn));
+
+#endif
   }
+ private:
+    std::shared_ptr<JSONGraphNode> CreateCompositeDenseJSONNode(const CallNode* cn) {
+    CompositeDenseNode nodes = UnpackCompositeDense(cn);
+    std::string name = "nn.dense";
+
+    // Inputs must be added in the same order they appear in the relay graph.
+    std::vector<JSONGraphNodeEntry> inputs;
+    inputs.push_back(VisitExpr(cn->args[0])[0]);
+    inputs.push_back(VisitExpr(nodes.dense->args[1])[0]);
+    if (nodes.requantize) {
+      name = "qnn.dense";
+      inputs.push_back(VisitExpr(nodes.dense->args[2])[0]);  // input zero-point
+      inputs.push_back(VisitExpr(nodes.dense->args[3])[0]);  // weight zero-point
+      inputs.push_back(VisitExpr(nodes.dense->args[4])[0]);  // input scale
+      inputs.push_back(VisitExpr(nodes.dense->args[5])[0]);  // weight scale
+    }
+    if (nodes.bias) {
+      inputs.push_back(VisitExpr(nodes.bias->args[1])[0]);
+    }
+    if (nodes.requantize) {
+      inputs.push_back(VisitExpr(nodes.requantize->args[3])[0]);  // output scale
+      inputs.push_back(VisitExpr(nodes.requantize->args[4])[0]);  // output zero-point
+    }
+
+    auto json_node = std::make_shared<JSONGraphNode>(name, "kernel", inputs, 1);
+    SetCallNodeAttribute(json_node, nodes.dense);
+    return json_node;
+  }
+  /*!
+   * \brief Extract dense nodes from a composite function.
+   *
+   * \param cn The call node of the composite function.
+   * \return Extracted composite convolution nodes.
+   */
+  static CompositeDenseNode UnpackCompositeDense(const CallNode* cn) {
+    CompositeDenseNode nodes{};
+    const auto* fn = cn->op.as<FunctionNode>();
+    CHECK(fn);
+
+    // Traverse composite dense function from child to parent
+    const auto* current_call = fn->body.as<CallNode>();
+    if (backend::IsOp(current_call, "qnn.requantize")) {
+      nodes.requantize = current_call;
+      current_call = current_call->args[0].as<CallNode>();
+    }
+    if (backend::IsOp(current_call, "nn.bias_add")) {
+      nodes.bias = current_call;
+      current_call = current_call->args[0].as<CallNode>();
+    }
+    // Enforce a dense node exists at this point during traversal
+    if (nodes.requantize) {
+      CHECK(backend::IsOp(current_call, "qnn.dense"));
+    } else {
+      CHECK(backend::IsOp(current_call, "nn.dense"));
+    }
+    nodes.dense = current_call;
+    return nodes;
+  }
+
 };
 
 /*!
