@@ -192,9 +192,21 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto data_entry = node.GetInputs()[0];
 
     //softmax aixs
-    auto axis_data = node.GetAttr<std::vector<std::string>>("axis")[0];
+    auto axis_data_tvm = node.GetAttr<std::vector<std::string>>("axis")[0];
+    auto shape_tvm = nodes_[data_entry.id_].GetOpShape()[data_entry.index_];
 
-    LOG(INFO) << "Softmax axis: " << axis_data;
+    uint32_t axis_data_vsi = 1;
+
+    LOG(INFO) << "Softmax tvm_axis: " << axis_data_tvm;
+
+    if (std::stoi(axis_data_tvm) < 0) {
+        axis_data_vsi = 0 - std::stoi(axis_data_tvm) - 1;
+    } else {
+       uint32_t dim_num = shape_tvm.size();
+       axis_data_vsi = dim_num - axis_data_vsi - 1;
+    }
+
+    LOG(INFO) << "Softmax vsi_axis: " << axis_data_vsi;
 
     JSONGraphNodeEntry out_entry(nid, 0);
 
@@ -206,7 +218,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     vsi_output = MakeVSITensorFromJSONEntry(out_entry);
 
     //set beta to 1.0
-    auto _op = graph_->CreateOperation<vsi::Softmax>(1.0f, std::stoi(axis_data));
+    auto _op = graph_->CreateOperation<vsi::Softmax>(1.0f, axis_data_vsi);
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
   }
 
