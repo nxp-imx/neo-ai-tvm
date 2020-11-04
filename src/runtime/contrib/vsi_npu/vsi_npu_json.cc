@@ -39,6 +39,8 @@
 #include "ovxlibxx/operation.h"
 #include "ovxlibxx/operations/fullyconnected.h"
 #include "ovxlibxx/operations/activations.h"
+#include "ovxlibxx/operations/softmax.h"
+
 #endif
 
 namespace tvm {
@@ -116,8 +118,10 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           LOG(INFO) << "Build op: " << op_name;
         } else if ("nn.relu" == op_name) {
           LOG(INFO) << "Build op: " << op_name;
+          Relu(nid);
         } else if ("nn.softmax" == op_name) {
           LOG(INFO) << "Build op: " << op_name;
+          Softmax(nid);
         } else if ("add" == op_name) {
           LOG(INFO) << "Build op: " << op_name;
         } else {
@@ -159,12 +163,51 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   }
 
   void Relu(const size_t& nid) {
+
+    auto node = nodes_[nid];
+    //JSONGraphNodeEntry input
+    auto data_entry = node.GetInputs()[0];
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+
+    std::shared_ptr<vsi::Tensor> vsi_input;
+    std::shared_ptr<vsi::Tensor> vsi_output;
+
+    vsi_input = MakeVSITensorFromJSONEntry(data_entry);
+
+    vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+
+    auto _op = graph_->CreateOperation<vsi::Relu>();
+    (*_op).BindInput(vsi_input).BindOutput(vsi_output);
+
   }
 
   void Add(const size_t& nid) {
   }
 
   void Softmax(const size_t& nid) {
+    auto node = nodes_[nid];
+
+    //JSONGraphNodeEntry input
+    auto data_entry = node.GetInputs()[0];
+
+    //softmax aixs
+    auto axis_data = node.GetAttr<std::vector<std::string>>("axis")[0];
+
+    LOG(INFO) << "Softmax axis: " << axis_data;
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+
+    std::shared_ptr<vsi::Tensor> vsi_input;
+    std::shared_ptr<vsi::Tensor> vsi_output;
+
+    vsi_input = MakeVSITensorFromJSONEntry(data_entry);
+
+    vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+
+    //set beta to 1.0
+    auto _op = graph_->CreateOperation<vsi::Softmax>(1.0f, std::stoi(axis_data));
+    (*_op).BindInput(vsi_input).BindOutput(vsi_output);
   }
 
   void BatchFlatten(const size_t& nid) {
