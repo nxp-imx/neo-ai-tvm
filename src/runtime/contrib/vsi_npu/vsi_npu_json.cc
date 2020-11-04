@@ -69,6 +69,32 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   }
 
   void Run() override {
+    std::cout << "func:"<<__FUNCTION__ << "   line:" << __LINE__ << std::endl;
+    for (size_t i = 0; i < input_nodes_.size(); ++i) {
+      auto nid = input_nodes_[i];
+      uint32_t eid = EntryID(nid, 0);
+      if (nodes_[nid].GetOpType() == "input") {
+	auto vsi_tensor = entry_out_tensor_[eid];
+
+        void* data = data_entry_[eid]->data;
+	int data_size = 1;
+        for (int j = 0; j < data_entry_[eid]->ndim; j++) {
+          data_size *= data_entry_[eid]->shape[j];
+        }
+        std::cout << "data_size = " << data_size << std::endl;
+        assert(vsi_tensor->CopyDataToTensor(data, data_size));
+      }
+    }
+
+    assert(graph_->Run());
+
+    for (size_t i = 0; i < outputs_.size(); ++i) {
+      uint32_t eid = EntryID(outputs_[i]);
+      void* data = data_entry_[eid]->data;
+
+      auto vsi_tensor = entry_out_tensor_[eid];
+      vsi_tensor->CopyDataFromTensor(data);
+    }
   }
  private:
 
