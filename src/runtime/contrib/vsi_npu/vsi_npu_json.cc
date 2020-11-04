@@ -40,7 +40,7 @@
 #include "ovxlibxx/operations/fullyconnected.h"
 #include "ovxlibxx/operations/activations.h"
 #include "ovxlibxx/operations/softmax.h"
-
+#include "ovxlibxx/operations/reshape.h"
 #endif
 
 namespace tvm {
@@ -113,6 +113,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         auto op_name = node.GetOpName();
         if ("nn.batch_flatten" == op_name) {
           LOG(INFO) << "Build op: " << op_name;
+	  Flatten(nid);
         } else if ("nn.dense" == op_name) {
 	  Dense(nid);
           LOG(INFO) << "Build op: " << op_name;
@@ -131,6 +132,29 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     }
     assert(graph_->Compile());
     std::cout << "Pass" << std::endl;
+  }
+
+  void Flatten(const size_t& nid) {
+    auto node = nodes_[nid];
+    JSONGraphNodeEntry out_entry(nid, 0);
+    std::vector<JSONGraphNodeEntry> inputs = node.GetInputs();
+
+    CHECK(inputs.size() == 1U) << "Flatten layer requires 1 inputs.";
+
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+    vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0]));
+    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+
+    std::vector<int64_t> tvm_shape = nodes_[inputs[0].id_].GetOpShape()[0];
+    uint32_t data_size = 1;
+    for (unsigned int i = 0; i < tvm_shape.size(); i ++) {
+      data_size *= tvm_shape[i];
+    }
+
+    std::vector<uint32_t> output_shape({data_size});
+    auto flatten = graph_->CreateOperation<vsi::Reshape>(output_shape.data(), 1);
+    (*flatten).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
   }
 
   void Dense(const size_t& nid) {
