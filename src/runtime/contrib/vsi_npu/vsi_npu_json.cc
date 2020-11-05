@@ -41,6 +41,8 @@
 #include "ovxlibxx/operations/activations.h"
 #include "ovxlibxx/operations/softmax.h"
 #include "ovxlibxx/operations/reshape.h"
+
+#include "vsi_utils.h"
 #endif
 
 namespace tvm {
@@ -223,12 +225,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     LOG(INFO) << "Softmax tvm_axis: " << axis_data_tvm;
 
-    if (std::stoi(axis_data_tvm) < 0) {
-        axis_data_vsi = 0 - std::stoi(axis_data_tvm) - 1;
-    } else {
-       uint32_t dim_num = shape_tvm.size();
-       axis_data_vsi = dim_num - axis_data_vsi - 1;
-    }
+    axis_data_vsi = ConvertAxis(std::stoi(axis_data_tvm), shape_tvm.size());
 
     LOG(INFO) << "Softmax vsi_axis: " << axis_data_vsi;
 
