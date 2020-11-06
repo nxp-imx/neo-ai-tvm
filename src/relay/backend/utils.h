@@ -53,7 +53,7 @@ struct ConstantUpdater : public ExprVisitor {
       : symbol_(symbol), params_(params) {}
 
   void VisitExpr_(const ConstantNode* cn) final {
-    std::string name = symbol_ + "_const_" + std::to_string(const_idx_++);
+    std::string name = symbol_ + "_const_" + std::to_string((long long)cn);
     (*params_)[name] = cn->data;
   }
 

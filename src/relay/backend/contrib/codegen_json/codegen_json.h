@@ -248,7 +248,7 @@ class JSONSerializer : public MemoizedExprTranslator<std::vector<JSONGraphNodeEn
   }
 
   std::vector<JSONGraphNodeEntry> VisitExpr_(const ConstantNode* cn) {
-    std::string name = symbol_ + "_const_" + std::to_string(params_.size());
+    std::string name = symbol_ + "_const_" + std::to_string((long long)cn);
     params_.push_back(name);
     auto node = std::make_shared<JSONGraphNode>(name, "const" /* op_type_ */);
     return AddNode(node, GetRef<Expr>(cn));
