@@ -41,6 +41,7 @@
 #include "ovxlibxx/operations/activations.h"
 #include "ovxlibxx/operations/softmax.h"
 #include "ovxlibxx/operations/reshape.h"
+#include "ovxlibxx/operations/pool2d.h"
 
 #include "vsi_utils.h"
 #endif
@@ -125,6 +126,9 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         } else if ("nn.softmax" == op_name) {
           LOG(INFO) << "Build op: " << op_name;
           Softmax(nid);
+        } else if (("nn.global_avg_pool2d" == op_name) || ("nn.global_max_pool2d" == op_name)) {
+          LOG(INFO) << "Build op: " << op_name;
+          GlobalPool2d(nid);
         } else if ("add" == op_name) {
           LOG(INFO) << "Build op: " << op_name;
         } else {
@@ -209,6 +213,41 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   }
 
   void Add(const size_t& nid) {
+  }
+
+  void GlobalPool2d(const size_t& nid) {
+
+    vsi::PoolType pool_type;
+
+    auto node = nodes_[nid];
+    //JSONGraphNodeEntry input
+    auto data_entry = node.GetInputs()[0];
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+
+    if (node.GetOpName() == "nn.global_max_pool2d") {
+      pool_type = vsi::PoolType::MAX;
+    } else if (node.GetOpName() == "nn.global_avg_pool2d") {
+      pool_type = vsi::PoolType::AVG;
+    } else {
+      LOG(FATAL) << "Pooling type not supported: " << node.GetOpName();
+    }
+
+    std::shared_ptr<vsi::Tensor> vsi_input;
+    std::shared_ptr<vsi::Tensor> vsi_output;
+
+    vsi_input = MakeVSITensorFromJSONEntry(data_entry);
+
+    vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+    auto vsi_shap = vsi_input->GetShape();
+    //layout is swapped, NCHW-->WHCN, [0]:W, [1]:H
+    std::vector<uint32_t> ksize = {vsi_shap[0], vsi_shap[1]};
+    //stride
+    std::vector<uint32_t> stride = {1, 1};
+
+    auto _op = graph_->CreateOperation<vsi::Pool2d>(pool_type, vsi::PadType::AUTO, ksize, stride);
+    (*_op).BindInput(vsi_input).BindOutput(vsi_output);
+
   }
 
   void Softmax(const size_t& nid) {
