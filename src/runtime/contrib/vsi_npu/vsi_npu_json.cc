@@ -75,7 +75,6 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   }
 
   void Run() override {
-    std::cout << "func:"<<__FUNCTION__ << "   line:" << __LINE__ << std::endl;
     for (size_t i = 0; i < input_nodes_.size(); ++i) {
       auto nid = input_nodes_[i];
       uint32_t eid = EntryID(nid, 0);
@@ -87,7 +86,6 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         for (int j = 0; j < data_entry_[eid]->ndim; j++) {
           data_size *= data_entry_[eid]->shape[j];
         }
-        std::cout << "data_size = " << data_size << std::endl;
         assert(vsi_tensor->CopyDataToTensor(data, data_size));
       }
     }
@@ -110,38 +108,30 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     for (size_t nid = 0; nid < nodes_.size(); ++nid) {
       const auto& node = nodes_[nid];
-      std::cout << "nid = " << nid << "; input = " << IsInputNode(nid) << std::endl;
-      std::cout << "nid = " << nid << "; output = " << IsOutputNode(nid) << std::endl;
       if (node.GetOpType() == "kernel") {
         CHECK_EQ(node.GetOpType(), "kernel");
         auto op_name = node.GetOpName();
+	LOG(INFO) << "Build op: " << op_name;
         if ("nn.batch_flatten" == op_name) {
-          LOG(INFO) << "Build op: " << op_name;
 	  Flatten(nid);
         } else if ("nn.dense" == op_name) {
 	  Dense(nid);
-          LOG(INFO) << "Build op: " << op_name;
         } else if ("nn.relu" == op_name) {
-          LOG(INFO) << "Build op: " << op_name;
           Relu(nid);
         } else if ("nn.softmax" == op_name) {
-          LOG(INFO) << "Build op: " << op_name;
           Softmax(nid);
         } else if ("nn.conv2d" == op_name) {
-          LOG(INFO) << "Build op: " << op_name;
           Conv2D(nid);
         } else if (("nn.global_avg_pool2d" == op_name) || ("nn.global_max_pool2d" == op_name)) {
-          LOG(INFO) << "Build op: " << op_name;
           GlobalPool2d(nid);
         } else if ("add" == op_name) {
-          LOG(INFO) << "Build op: " << op_name;
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
       }
     }
     assert(graph_->Compile());
-    std::cout << "Pass" << std::endl;
+    LOG(INFO) << "Build graph successfully" << std::endl;
   }
 
   void Flatten(const size_t& nid) {
@@ -254,21 +244,14 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
   void Softmax(const size_t& nid) {
     auto node = nodes_[nid];
-
     //JSONGraphNodeEntry input
     auto data_entry = node.GetInputs()[0];
-
     //softmax aixs
     auto axis_data_tvm = node.GetAttr<std::vector<std::string>>("axis")[0];
     auto shape_tvm = nodes_[data_entry.id_].GetOpShape()[data_entry.index_];
-
     uint32_t axis_data_vsi = 1;
 
-    LOG(INFO) << "Softmax tvm_axis: " << axis_data_tvm;
-
     axis_data_vsi = ConvertAxis(std::stoi(axis_data_tvm), shape_tvm.size());
-
-    LOG(INFO) << "Softmax vsi_axis: " << axis_data_vsi;
 
     JSONGraphNodeEntry out_entry(nid, 0);
 
@@ -276,7 +259,6 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::shared_ptr<vsi::Tensor> vsi_output;
 
     vsi_input = MakeVSITensorFromJSONEntry(data_entry);
-
     vsi_output = MakeVSITensorFromJSONEntry(out_entry);
 
     //set beta to 1.0
@@ -354,6 +336,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   bool IsInputNode(const size_t& nid) {
     return std::find(input_nodes_.begin(), input_nodes_.end(), nid) != input_nodes_.end();
   }
+
   bool IsOutputNode(const size_t& nid) {
     int size = outputs_.size();
     for(int i = 0; i< size; i++) {
@@ -376,19 +359,15 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
                                                  JSONGraphNodeEntry* scale = nullptr,
                                                  JSONGraphNodeEntry* offset = nullptr) {
     auto eid = EntryID(tensor);
-    std::cout << "In MakeVSITensorFromJSONEntry eid=" << eid << std::endl;
 
     if (entry_out_tensor_.count(eid) != 0) {
       //using the existed VSItensor
-      std::cout << "###BindVSITensor using exting ID: " << eid <<std::endl;
       return entry_out_tensor_[eid];
     }
-    std::cout << "func:"<<__FUNCTION__ << "   line:" << __LINE__ << std::endl;
     //create new VSItensor
     JSONGraphNode node = nodes_[tensor.id_];
     void* node_data = nullptr;
     vsi::TensorAttribute vsi_attr;
-    std::cout << "func:"<<__FUNCTION__ << "   line:" << __LINE__ << std::endl;
 
     if (node.GetOpType() == "const") {
       node_data = data_entry_[EntryID(tensor)]->data;
@@ -400,18 +379,15 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     } else {
       vsi_attr = vsi::TensorAttribute::TRANSIENT;
     }
-    std::cout << "func:"<<__FUNCTION__ << "   line:" << __LINE__ << std::endl;
 
-    std::cout << "###BindVSITensor bind new ID: " << eid <<std::endl;
     auto vsi_tensor = MakeVSITensor(node, node_data, vsi_attr, scale, offset);
     entry_out_tensor_.insert({eid, vsi_tensor});
     return entry_out_tensor_[eid];
   }
 
   std::shared_ptr<vsi::Tensor> MakeDummyBiasTensor(vsi::DataType dtype,
-			vsi::ShapeType bias_shape) {
+		 		 vsi::ShapeType bias_shape) {
     std::vector<float> bias_data(bias_shape[0], 0);
-    std::cout << "bias_shape" << bias_data.size() << std::endl;
 
     vsi::TensorSpec bias_spec(dtype, bias_shape,
 		    vsi::TensorAttribute::CONSTANT);
@@ -425,7 +401,6 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 				  vsi::TensorAttribute vsi_attr,
                                   JSONGraphNodeEntry* scale = nullptr,
                                   JSONGraphNodeEntry* offset = nullptr) {
-    std::cout << "In MakeVSITensor eid=" << std::endl;
     //VSI parameter
     vsi::ShapeType vsi_shape;
     vsi::DataType vsi_dtype;
@@ -433,34 +408,22 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::vector<int64_t> tvm_shape = tensor_rep.GetOpShape()[0];
     DLDataType tvm_dtype = tensor_rep.GetOpDataType()[0];
 
-    std::cout << "vsi::vsi_shape ={";
     for (unsigned int i = 0; i < tvm_shape.size(); i ++) {
       vsi_shape.push_back(tvm_shape[tvm_shape.size() - i - 1]);
-      std::cout << vsi_shape[i] << ",";
     }
-    std::cout << "}" << std::endl;
 
     if (tvm_dtype.code == DLDataTypeCode::kDLFloat && tvm_dtype.bits == 32) {
       vsi_dtype = vsi::DataType::FLOAT32;
-      std::cout << "vsi::DataType::FLOAT32" << std::endl;
     } else if (tvm_dtype.code == DLDataTypeCode::kDLUInt && tvm_dtype.bits == 8) {
       vsi_dtype = vsi::DataType::UINT8;
-      std::cout << "vsi::DataType::UINT8" << std::endl;
     } else {
       vsi_dtype = vsi::DataType::FLOAT32;
-      LOG(FATAL) << "Datatype " << tvm_dtype << " unsupported by VSI runtime";
     }
 
-
-    // If scale and offset provided create quantized ACL tensor.
+    // If scale and offset provided create quantized tensor.
     if (scale != nullptr && offset != nullptr) {
-      //std::vector<float> scale_data = GetVectorFromDLTensor<float>(data_entry_[EntryID(*scale)]);
-      //std::vector<int> offset_data = GetVectorFromDLTensor<int>(data_entry_[EntryID(*offset)]);
-      //CHECK(scale_data.size() == 1 && offset_data.size() == 1)
-      //    << "Currently only per-layer quantization is supported in the Arm Compute Library runtime.";
-      //vsi::Quantization input_quant(vsi::QuantType::ASYMMETRIC, scale_data[0], offset_data[0]);
+	    //qnn tensor
     }
-    std::cout << "In MakeVSITensor 22222=" << std::endl;
 
     vsi::TensorSpec input_spec(vsi_dtype, vsi_shape, vsi_attr);
     std::shared_ptr<vsi::Tensor> tensor;
@@ -470,20 +433,6 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       tensor = graph_->CreateTensor(input_spec);
     return tensor;
   }
-
-#if 0
-  template <typename T>
-  std::vector<T> GetVectorFromDLTensor(const DLTensor* tensor) {
-    CHECK(tensor) << "Cannot convert a nullptr";
-    int len = 1;
-    for (int i = 0; i < tensor->ndim; i++) {
-      len *= tensor->shape[i];
-    }
-    T* data = static_cast<T*>(tensor->data);
-    return std::vector<T>(data, data + len);
-  }
-#endif
-
 
   std::shared_ptr<vsi::Context> context_;
   std::shared_ptr<vsi::Graph> graph_;
