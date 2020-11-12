@@ -42,6 +42,7 @@
 #include "ovxlibxx/operations/softmax.h"
 #include "ovxlibxx/operations/reshape.h"
 #include "ovxlibxx/operations/pool2d.h"
+#include "ovxlibxx/operations/conv2d.h"
 
 #include "vsi_utils.h"
 #endif
@@ -126,6 +127,9 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         } else if ("nn.softmax" == op_name) {
           LOG(INFO) << "Build op: " << op_name;
           Softmax(nid);
+        } else if ("nn.conv2d" == op_name) {
+          LOG(INFO) << "Build op: " << op_name;
+          Conv2D(nid);
         } else if (("nn.global_avg_pool2d" == op_name) || ("nn.global_max_pool2d" == op_name)) {
           LOG(INFO) << "Build op: " << op_name;
           GlobalPool2d(nid);
@@ -168,7 +172,6 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     // Collect inputs and outputs, handling both nn.dense and qnn.dense cases.
     std::vector<JSONGraphNodeEntry> inputs = node.GetInputs();
     size_t num_inputs = inputs.size();
-    bool has_bias;
     JSONGraphNodeEntry out_entry(nid, 0);
     
     std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
@@ -180,7 +183,6 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     } else {
       CHECK(num_inputs >= 2U && num_inputs <= 3U)
           << "Fully connected (dense) layer requires 3 inputs with a bias, 2 inputs without.";
-      has_bias = num_inputs == 3;
       for (const auto& i : inputs) {
         vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
       }
@@ -282,6 +284,70 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
   }
 
+  void Conv2D(const size_t& nid) {
+    auto node = nodes_[nid];
+    std::vector<std::string> pad = node.GetAttr<std::vector<std::string>>("padding");
+    std::vector<std::string> strides = node.GetAttr<std::vector<std::string>>("strides");
+    std::vector<std::string> dilation = node.GetAttr<std::vector<std::string>>("dilation");
+    auto is_depthwise = node.GetAttr<std::vector<std::string>>("is_depthwise")[0];
+
+    int groups = std::stoi(node.GetAttr<std::vector<std::string>>("groups")[0]);
+
+    // Collect inputs and outputs, handling both nn.conv2d and qnn.conv2d cases.
+    std::vector<JSONGraphNodeEntry> inputs = node.GetInputs();
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+    size_t num_inputs = inputs.size();
+    JSONGraphNodeEntry out_entry(nid, 0);
+
+    if (node.GetOpName() == "qnn.conv2d") {
+      CHECK(num_inputs >= 8U && num_inputs <= 9U)
+          << "Quantized convolution requires 9 inputs with a bias, 8 inputs without.";
+    } else {
+      CHECK(num_inputs >= 2U && num_inputs <= 3U)
+          << "Convolution requires 3 inputs with a bias, 2 inputs without.";
+      for (const auto& i : inputs) {
+        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
+      }
+      vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+    }
+
+    // TVM: top, left, bottom, right -> VSI: left, right, top, bottom
+    auto weight_tensor = vsi_inputs[1];
+    std::vector<uint32_t> vsi_pad;
+    vsi_pad.push_back(std::stoi(pad[1]));
+    vsi_pad.push_back(std::stoi(pad[3]));
+    vsi_pad.push_back(std::stoi(pad[0]));
+    vsi_pad.push_back(std::stoi(pad[2]));
+
+    std::vector<uint32_t> vsi_strides;
+    vsi_strides.push_back(std::stoi(strides[0]));
+    vsi_strides.push_back(std::stoi(strides[1]));
+
+    std::vector<uint32_t> vsi_dilation;
+    vsi_dilation.push_back(std::stoi(dilation[0]));
+    vsi_dilation.push_back(std::stoi(dilation[1]));
+
+    std::vector<uint32_t> vsi_ksize;
+    vsi_ksize.push_back(weight_tensor->GetShape()[0]);
+    vsi_ksize.push_back(weight_tensor->GetShape()[1]);
+
+    if (vsi_inputs.size() == 2) {
+      vsi_inputs.push_back(MakeDummyBiasTensor(vsi_inputs[0]->GetDataType(),
+			      {weight_tensor->GetShape()[3]}));
+    }
+    int32_t vsi_multiplier = 0;
+    if (std::stoi(is_depthwise) == 1) {
+      vsi_multiplier = static_cast<int32_t>(weight_tensor->GetShape()[2]);
+    }
+
+    auto fc = graph_->CreateOperation<vsi::Conv2d>(static_cast<int32_t>(weight_tensor->GetShape()[3]),
+		    vsi::PadType::AUTO, vsi_ksize, vsi_strides, vsi_dilation,
+		    vsi_pad, groups, vsi_multiplier);
+    (*fc).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+  }
+
+
   void BatchFlatten(const size_t& nid) {
   }
 
@@ -340,6 +406,19 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto vsi_tensor = MakeVSITensor(node, node_data, vsi_attr, scale, offset);
     entry_out_tensor_.insert({eid, vsi_tensor});
     return entry_out_tensor_[eid];
+  }
+
+  std::shared_ptr<vsi::Tensor> MakeDummyBiasTensor(vsi::DataType dtype,
+			vsi::ShapeType bias_shape) {
+    std::vector<float> bias_data(bias_shape[0], 0);
+    std::cout << "bias_shape" << bias_data.size() << std::endl;
+
+    vsi::TensorSpec bias_spec(dtype, bias_shape,
+		    vsi::TensorAttribute::CONSTANT);
+    auto bias = graph_->CreateTensor(bias_spec, bias_data.data());
+    dummy_tensor_.push_back(bias);
+
+    return bias;
   }
 
   std::shared_ptr<vsi::Tensor> MakeVSITensor(const JSONGraphNode& tensor_rep, void* data,
@@ -410,6 +489,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   std::shared_ptr<vsi::Graph> graph_;
   /* The entry ID to its corresponding output memory. */
   std::unordered_map<uint32_t, std::shared_ptr<vsi::Tensor>> entry_out_tensor_;
+  std::vector<std::shared_ptr<vsi::Tensor>> dummy_tensor_;
 };
 
 #else

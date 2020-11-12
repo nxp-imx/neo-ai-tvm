@@ -28,6 +28,7 @@
 #include <tvm/relay/type.h>
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/registry.h>
+#include <tvm/tir/analysis.h>
 
 #include <fstream>
 #include <numeric>
@@ -49,6 +50,17 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
   using JSONGraphNodeEntry = tvm::runtime::json::JSONGraphNodeEntry;
 
  public:
+  /*!
+   * \brief A series of operators that form a composite
+   * convolution. Supports both nn.conv2d and qnn.conv2d.
+   */
+  struct CompositeConvNode {
+    const CallNode* pad = nullptr;
+    const CallNode* conv = nullptr;
+    const CallNode* bias = nullptr;
+    const CallNode* requantize = nullptr;
+  };
+
   /*!
    * \brief A series of operators that form a composite
    * dense layer. Supports both nn.dense and qnn.dense.
@@ -109,6 +121,8 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
     std::shared_ptr<JSONGraphNode> json_node;
     if (name == "vsi_npu.dense") {
       json_node = CreateCompositeDenseJSONNode(cn);
+    } else if (name == "vsi_npu.conv2d" || name == "vsi_npu.qnn_conv2d") {
+      json_node = CreateCompositeConvJSONNode(cn);
     } else {
       LOG(FATAL) << "Unrecognized VSI NPU pattern: " << name;
     }
@@ -144,6 +158,74 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
     SetCallNodeAttribute(json_node, nodes.dense);
     return json_node;
   }
+
+  /*!
+   * \brief Create a JSON representation of a composite convolution.
+   *
+   * \param cn The call to be represented.
+   * \return A JSON representation of a specific operator.
+   */
+  std::shared_ptr<JSONGraphNode> CreateCompositeConvJSONNode(const CallNode* cn) {
+    CompositeConvNode nodes = UnpackCompositeConvolution(cn);
+    std::string name = "nn.conv2d";
+
+    const auto* conv_attr = nodes.conv->attrs.as<Conv2DAttrs>();
+    CHECK(conv_attr);
+    CHECK(conv_attr->kernel_layout == "OIHW")
+        << "Kernel layout must be OIHW, has the module been pre-processed correctly?";
+    CHECK(conv_attr->data_layout == "NCHW")
+        << "Input data layout must be NCHW, has the module been pre-processed correctly?";
+
+    // Inputs must be added in the same order they appear in the relay graph.
+    std::vector<JSONGraphNodeEntry> inputs;
+    inputs.push_back(VisitExpr(cn->args[0])[0]);
+    inputs.push_back(VisitExpr(nodes.conv->args[1])[0]);
+    if (nodes.requantize) {
+      name = "qnn.conv2d";
+      inputs.push_back(VisitExpr(nodes.conv->args[2])[0]);  // input zero-point
+      inputs.push_back(VisitExpr(nodes.conv->args[3])[0]);  // kernel zero-point
+      inputs.push_back(VisitExpr(nodes.conv->args[4])[0]);  // input scale
+      inputs.push_back(VisitExpr(nodes.conv->args[5])[0]);  // kernel scale
+    }
+    if (nodes.bias) {
+      inputs.push_back(VisitExpr(nodes.bias->args[1])[0]);
+    }
+    if (nodes.requantize) {
+      inputs.push_back(VisitExpr(nodes.requantize->args[3])[0]);  // output scale
+      inputs.push_back(VisitExpr(nodes.requantize->args[4])[0]);  // output zero-point
+    }
+
+    auto json_node = std::make_shared<JSONGraphNode>(name, "kernel", inputs, 1);
+    SetCallNodeAttribute(json_node, nodes.conv);
+
+    // Override attributes
+    if (nodes.pad) {
+      const auto* pad_attr = nodes.pad->attrs.as<PadAttrs>();
+      CHECK(pad_attr);
+      auto p = pad_attr->pad_width;
+      // Convert to TVM layout for now, conversion to VSI layout takes place in runtime.
+      // Standard convolution pad layout for TVM: top, left, bottom, right.
+      std::vector<std::string> padding = {std::to_string(p[1][0].as<IntImmNode>()->value),
+                                          std::to_string(p[2][0].as<IntImmNode>()->value),
+                                          std::to_string(p[1][1].as<IntImmNode>()->value),
+                                          std::to_string(p[2][1].as<IntImmNode>()->value)};
+      std::vector<dmlc::any> padding_attr;
+      padding_attr.emplace_back(padding);
+      json_node->SetAttr("padding", padding_attr);
+    }
+
+    // Create depthwise info
+    bool is_depthwise = conv_attr->channels.defined() &&
+                         tvm::tir::ExprDeepEqual()(conv_attr->channels, conv_attr->groups) &&
+                         conv_attr->groups != 1;
+    std::vector<dmlc::any> depthwise_attr;
+    std::vector<std::string> depthwise = {std::to_string(is_depthwise)};
+    depthwise_attr.emplace_back(depthwise);
+    json_node->SetAttr("is_depthwise", depthwise_attr);
+
+    return json_node;
+  }
+
   /*!
    * \brief Extract dense nodes from a composite function.
    *
@@ -172,6 +254,42 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
       CHECK(backend::IsOp(current_call, "nn.dense"));
     }
     nodes.dense = current_call;
+    return nodes;
+  }
+
+  /*!
+   * \brief Extract convolution nodes from a composite function.
+   *
+   * \param cn The call node of the composite function.
+   * \return Extracted composite convolution nodes.
+   */
+  static CompositeConvNode UnpackCompositeConvolution(const CallNode* cn) {
+    CompositeConvNode nodes{};
+    const auto* fn = cn->op.as<FunctionNode>();
+    CHECK(fn);
+
+    // Traverse composite convolution function from child to parent
+    const auto* current_call = fn->body.as<CallNode>();
+    if (backend::IsOp(current_call, "qnn.requantize")) {
+      nodes.requantize = current_call;
+      current_call = current_call->args[0].as<CallNode>();
+    }
+    if (backend::IsOp(current_call, "nn.bias_add")) {
+      nodes.bias = current_call;
+      current_call = current_call->args[0].as<CallNode>();
+    }
+    // Enforce a convolution node exists at this point during traversal
+    if (nodes.requantize) {
+      CHECK(backend::IsOp(current_call, "qnn.conv2d"));
+    } else {
+      CHECK(backend::IsOp(current_call, "nn.conv2d"));
+    }
+    nodes.conv = current_call;
+    if (!current_call->args.empty() && current_call->args[0]->IsInstance<CallNode>()) {
+      current_call = current_call->args[0].as<CallNode>();
+      if (backend::IsOp(current_call, "nn.pad")) {
+      }
+    }
     return nodes;
   }
 

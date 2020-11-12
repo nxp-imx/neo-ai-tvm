@@ -61,7 +61,7 @@ def _register_external_op_helper(op_name, supported=True):
     return _func_wrapper
 
 
-_register_external_op_helper("add")
+#_register_external_op_helper("add")
 _register_external_op_helper("nn.batch_flatten")
 #_register_external_op_helper("nn.bias_add")
 #_register_external_op_helper("nn.dense")
@@ -74,6 +74,19 @@ _register_external_op_helper("nn.global_max_pool2d")
 @register_pattern_table("vsi_npu")
 def vsi_npu_pattern_table():
     """Get the VSI NPU pattern table."""
+
+    def conv_pattern():
+        """Create a convolution pattern.
+
+        Returns
+        -------
+        pattern : dataflow_pattern.AltPattern
+            Denotes the convolution pattern.
+        """
+        pattern = is_op("nn.pad")(wildcard()) | wildcard()
+        pattern = is_op("nn.conv2d")(pattern, is_constant())
+        pattern = pattern.optional(lambda x: is_op("nn.bias_add")(x, is_constant()))
+        return pattern
 
     def dense_pattern():
         """Create a dense (fully-connected) pattern.
@@ -89,6 +102,7 @@ def vsi_npu_pattern_table():
 
     vsi_npu_patterns = [
             ("vsi_npu.dense", dense_pattern()),
+            ("vsi_npu.conv2d", conv_pattern()),
             ]
     return vsi_npu_patterns
 
