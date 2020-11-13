@@ -49,16 +49,16 @@ def verify_vsi_result(mod, params, data_shape, out_shape, dtype="float32"):
     data = np.random.uniform(size=data_shape).astype(dtype)
 
     ref_out = get_ref_result(data, mod, params, out_shape, dtype)
-    print("Expected output: ")
-    print(ref_out.asnumpy())
 
     try:
         vsi_out = get_vsi_result(data, mod, params, out_shape, dtype)
         tol = 1e-5
         tvm.testing.assert_allclose(ref_out.asnumpy(), vsi_out.asnumpy(), rtol=tol, atol=tol)
-        print("Actual output: ")
-        print(vsi_out.asnumpy())
+
     except Exception as err:
+        print("\nExpected output: ")
+        print(ref_out.asnumpy())
+        print("Actual output: ")
         print(err)
         print("FAIL")
     else:

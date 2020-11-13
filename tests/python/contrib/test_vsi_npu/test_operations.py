@@ -6,7 +6,7 @@ from infrastructure import verify_vsi_result
 
 def _single_operation_test(relay_nn_func, dtype, data_shape, out_shape, *args):
     op_name = relay_nn_func.__name__.upper()
-    print("\n================ testing %s =================" %(op_name))
+    print("Testing {0: <50}".format(op_name), end="")
     data = relay.var("data", shape=data_shape, dtype=dtype)
 
     if args:
