@@ -5,6 +5,8 @@ from infrastructure import verify_vsi_result
 
 
 def _single_operation_test(relay_nn_func, dtype, data_shape, out_shape, *args):
+    op_name = relay_nn_func.__name__.upper()
+    print("\n================ testing %s =================" %(op_name))
     data = relay.var("data", shape=data_shape, dtype=dtype)
 
     if args:
@@ -18,7 +20,6 @@ def _single_operation_test(relay_nn_func, dtype, data_shape, out_shape, *args):
     mod, params = relay.testing.init.create_workload(net)
 
     verify_vsi_result(mod, params, data_shape, out_shape, dtype)
-
 
 def test_global_avg_pool2d():
     func = relay.nn.global_avg_pool2d
@@ -61,8 +62,6 @@ def test_batch_flatten():
     data_shape = (1, 5, 10, 10)
     out_shape = (1, 500)
     _single_operation_test(func, dtype, data_shape, out_shape)
-
-
 
 if __name__ == "__main__":
     test_softmax()
