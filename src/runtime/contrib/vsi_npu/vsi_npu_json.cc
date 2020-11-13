@@ -43,6 +43,7 @@
 #include "ovxlibxx/operations/reshape.h"
 #include "ovxlibxx/operations/pool2d.h"
 #include "ovxlibxx/operations/conv2d.h"
+#include "ovxlibxx/operations/batchnorm.h"
 
 #include "vsi_utils.h"
 #endif
@@ -120,6 +121,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Relu(nid);
         } else if ("nn.softmax" == op_name) {
           Softmax(nid);
+        } else if ("nn.batch_norm" == op_name) {
+          BatchNorm(nid);
         } else if ("nn.conv2d" == op_name) {
           Conv2D(nid);
         } else if (("nn.global_avg_pool2d" == op_name) || ("nn.global_max_pool2d" == op_name)) {
@@ -205,6 +208,40 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   }
 
   void Add(const size_t& nid) {
+  }
+
+  void BatchNorm(const size_t& nid) {
+    auto node = nodes_[nid];
+
+    auto inputs = node.GetInputs();
+
+    /* inputs[0]: input,
+     * inputs[1]: gamma,
+     * inputs[2]: beta,
+     * inputs[3]: moving_mean,
+     * inputs[4]: moving_var
+     */
+
+    CHECK(inputs.size() == 5U) << "BatchNormal layer requires 5 inputs.";
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+
+    vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0]));
+    vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[3]));
+    vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[4]));
+    vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[1]));
+    vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[2]));
+
+    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+
+    float epsilon = std::stof(node.GetAttr<std::vector<std::string>>("epsilon")[0]);
+
+    auto bn = graph_->CreateOperation<vsi::BatchNorm>(epsilon);
+    (*bn).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+
   }
 
   void GlobalPool2d(const size_t& nid) {

@@ -69,6 +69,7 @@ _register_external_op_helper("nn.relu")
 _register_external_op_helper("nn.softmax")
 _register_external_op_helper("nn.global_avg_pool2d")
 _register_external_op_helper("nn.global_max_pool2d")
+_register_external_op_helper("nn.batch_norm")
 
 
 @register_pattern_table("vsi_npu")

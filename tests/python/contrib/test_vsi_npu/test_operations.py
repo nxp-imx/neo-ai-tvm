@@ -1,3 +1,4 @@
+import tvm
 from tvm import relay
 from tvm.relay import testing
 import numpy as np
@@ -63,7 +64,36 @@ def test_batch_flatten():
     out_shape = (1, 500)
     _single_operation_test(func, dtype, data_shape, out_shape)
 
+def test_batch_norm():
+    data_shape = (1, 4)
+    c_shape = (4,)
+    out_shape = (1, 4)
+    dtype="float32"
+
+    def get_workload(data_shape, weight_shape, dtype="float32"):
+        data = relay.var("data", shape=data_shape, dtype=dtype)
+
+        w = tvm.nd.array(np.ones(weight_shape, dtype))
+        gamma = relay.const(w, dtype)
+        beta = relay.const(w, dtype)
+        moving_mean = relay.const(w, dtype)
+        moving_var = relay.const(w, dtype)
+
+        bn = relay.nn.batch_norm(data, gamma, beta, moving_mean, moving_var)
+        out = bn[0]
+
+        args = relay.analysis.free_vars(out)
+        net = relay.Function(args, out)
+
+        return relay.testing.init.create_workload(net)
+
+    print("Testing {0: <50}".format("batch_norm"), end="")
+    mod, params = get_workload(data_shape, c_shape, dtype)
+    verify_vsi_result(mod, params, data_shape, out_shape, dtype)
+
+
 if __name__ == "__main__":
+    test_batch_norm()
     test_softmax()
     test_relu()
     test_batch_flatten()
