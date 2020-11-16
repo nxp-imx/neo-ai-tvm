@@ -56,6 +56,30 @@ def test_relu():
     out_shape = data_shape
     _single_operation_test(func, dtype, data_shape, out_shape)
 
+def test_add():
+    dtype = "float32"
+    data_shape = (1, 20, 12, 9)
+    out_shape = data_shape
+
+    def get_workload(data_shape, dtype="float32"):
+        '''customized keywords(like data0,data1...) are not supported in \
+        relay.testing.init.create_workload
+        '''
+        data0 = relay.var("data", shape=data_shape, dtype=dtype)
+        data1 = relay.var("weight", shape=data_shape, dtype=dtype)
+
+        out = relay.add(data0, data1)
+
+        args = relay.analysis.free_vars(out)
+        net = relay.Function(args, out)
+
+        return relay.testing.init.create_workload(net)
+
+    print("Testing {0: <50}".format("ADD"), end="")
+    mod, params = get_workload(data_shape, dtype)
+    verify_vsi_result(mod, params, data_shape, out_shape, dtype)
+
+
 def test_batch_flatten():
     func = relay.nn.batch_flatten
 
@@ -87,7 +111,7 @@ def test_batch_norm():
 
         return relay.testing.init.create_workload(net)
 
-    print("Testing {0: <50}".format("batch_norm"), end="")
+    print("Testing {0: <50}".format("BATCH_NORM"), end="")
     mod, params = get_workload(data_shape, c_shape, dtype)
     verify_vsi_result(mod, params, data_shape, out_shape, dtype)
 
@@ -95,6 +119,7 @@ def test_batch_norm():
 if __name__ == "__main__":
     test_batch_norm()
     test_softmax()
+    test_add()
     test_relu()
     test_batch_flatten()
     test_global_avg_pool2d()

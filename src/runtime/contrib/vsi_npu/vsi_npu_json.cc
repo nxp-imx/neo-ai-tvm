@@ -44,6 +44,7 @@
 #include "ovxlibxx/operations/pool2d.h"
 #include "ovxlibxx/operations/conv2d.h"
 #include "ovxlibxx/operations/batchnorm.h"
+#include "ovxlibxx/operations/add.h"
 
 #include "vsi_utils.h"
 #endif
@@ -128,6 +129,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         } else if (("nn.global_avg_pool2d" == op_name) || ("nn.global_max_pool2d" == op_name)) {
           GlobalPool2d(nid);
         } else if ("add" == op_name) {
+          Add(nid);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -208,6 +210,26 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   }
 
   void Add(const size_t& nid) {
+    auto node = nodes_[nid];
+
+    auto inputs = node.GetInputs();
+
+    CHECK(inputs.size() >= 2U) << "BatchNormal layer requires at least 2 inputs.";
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+
+    for (const auto& i : inputs) {
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
+    }
+
+    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+
+    auto add = graph_->CreateOperation<vsi::Add>();
+    (*add).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+
   }
 
   void BatchNorm(const size_t& nid) {
