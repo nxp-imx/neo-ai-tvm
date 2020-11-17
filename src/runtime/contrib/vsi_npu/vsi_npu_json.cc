@@ -128,6 +128,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Conv2D(nid);
         } else if (("nn.global_avg_pool2d" == op_name) || ("nn.global_max_pool2d" == op_name)) {
           GlobalPool2d(nid);
+        } else if (("nn.max_pool2d" == op_name) || ("nn.avg_pool2d" == op_name)) {
+          Pool2d(nid);
         } else if ("add" == op_name) {
           Add(nid);
         } else {
@@ -266,6 +268,68 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
   }
 
+  void Pool2d(const size_t& nid) {
+
+    vsi::PoolType pool_type;
+    vsi::RoundType round_type;
+
+    auto node = nodes_[nid];
+    auto inputs = node.GetInputs();
+
+    /* inputs[0]: input data,
+     * attr: pool_size,
+     * attr: strides,
+     * attr: padding,
+     */
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+
+    std::vector<std::string> tvm_pool_size = node.GetAttr<std::vector<std::string>>("pool_size");
+    std::vector<std::string> tvm_strides = node.GetAttr<std::vector<std::string>>("strides");
+    std::vector<std::string> tvm_pad = node.GetAttr<std::vector<std::string>>("padding");
+    std::vector<std::string> tvm_ceil_mode = node.GetAttr<std::vector<std::string>>("ceil_mode");
+
+    if (std::stoi(tvm_ceil_mode[0]) > 0) {
+        round_type = vsi::RoundType::CEILING;
+    } else {
+        round_type = vsi::RoundType::FLOOR;
+    }
+
+    if (node.GetOpName() == "nn.max_pool2d") {
+      pool_type = vsi::PoolType::MAX;
+    } else if (node.GetOpName() == "nn.avg_pool2d") {
+      pool_type = vsi::PoolType::AVG;
+    } else {
+      LOG(FATAL) << "Pooling type not supported: " << node.GetOpName();
+    }
+
+    std::vector<uint32_t> vsi_ksize;
+    for (const auto& i : tvm_pool_size) {
+        vsi_ksize.push_back(std::stoi(i));
+    }
+
+    std::vector<uint32_t> vsi_stride;
+    for (const auto& i : tvm_strides) {
+        vsi_stride.push_back(std::stoi(i));
+    }
+
+    std::vector<uint32_t> vsi_pad;
+    vsi_pad.push_back(std::stoi(tvm_pad[1]));
+    vsi_pad.push_back(std::stoi(tvm_pad[3]));
+    vsi_pad.push_back(std::stoi(tvm_pad[0]));
+    vsi_pad.push_back(std::stoi(tvm_pad[2]));
+
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+
+    vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0]));
+    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+
+    auto pool = graph_->CreateOperation<vsi::Pool2d>(pool_type, vsi::PadType::AUTO, vsi_ksize, vsi_stride, vsi_pad, round_type);
+    (*pool).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+
+  }
+
   void GlobalPool2d(const size_t& nid) {
 
     vsi::PoolType pool_type;
@@ -295,8 +359,9 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::vector<uint32_t> ksize = {vsi_shap[0], vsi_shap[1]};
     //stride
     std::vector<uint32_t> stride = {1, 1};
+    std::vector<uint32_t> pad = {0, 0, 0, 0};
 
-    auto _op = graph_->CreateOperation<vsi::Pool2d>(pool_type, vsi::PadType::AUTO, ksize, stride);
+    auto _op = graph_->CreateOperation<vsi::Pool2d>(pool_type, vsi::PadType::AUTO, ksize, stride, pad);
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
 
   }
