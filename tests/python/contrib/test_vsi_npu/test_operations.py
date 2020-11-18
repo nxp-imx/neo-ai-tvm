@@ -130,6 +130,59 @@ def test_batch_norm():
     mod, params = get_workload(data_shape, c_shape, dtype)
     verify_vsi_result(mod, params, data_shape, out_shape, dtype)
 
+def test_conv2d():
+    data_shape = (1, 256, 64, 64)
+    weight_shape = (256, 256, 3, 3)
+    out_shape = (1, 256, 64, 64)
+    dtype="float32"
+    Pad=(1,1,1,1)
+    Strides=(1,1)
+    Dilation=(1,1)
+    Ksize=(3,3)
+    Groups=1
+
+    def get_workload(data_shape, weight_shape, dtype="float32"):
+        """Function to construct a MobileNet"""
+        data = relay.var("data", shape=data_shape, dtype=dtype)
+        weight = relay.var("conv_weight")
+        conv = relay.nn.conv2d(
+            data,
+            weight,
+            channels=weight_shape[0],
+            kernel_size=Ksize,
+            strides=Strides,
+            padding=Pad,
+            groups=Groups,
+            data_layout="NCHW",
+            kernel_layout="OIHW"
+        )
+        args = relay.analysis.free_vars(conv)
+        net = relay.Function(args, conv)
+        return relay.testing.init.create_workload(net)
+
+    print("Testing {0: <50}".format("CONV2D"), end="")
+    mod, params = get_workload(data_shape, weight_shape, dtype)
+    verify_vsi_result(mod, params, data_shape, out_shape, dtype)
+
+
+def test_dense():
+    data_shape = (1, 784)
+    weight_shape = (128, 784)
+    out_shape = (1, 128)
+    dtype="float32"
+
+    def get_workload(data_shape, weight_shape, dtype="float32"):
+        data = relay.var("data", shape=data_shape, dtype=dtype)
+        fc1 = relay.nn.dense(data, relay.var("fc1_weight"), units=weight_shape[0])
+        fc = relay.nn.bias_add(fc1, relay.var("fc1_bias"), axis=1)
+        args = relay.analysis.free_vars(fc)
+        net = relay.Function(args, fc)
+
+        return relay.testing.init.create_workload(net)
+
+    print("Testing {0: <50}".format("DENSE_BIAS_ADD"), end="")
+    mod, params = get_workload(data_shape, weight_shape, dtype)
+    verify_vsi_result(mod, params, data_shape, out_shape, dtype)
 
 if __name__ == "__main__":
     test_batch_norm()
@@ -141,4 +194,6 @@ if __name__ == "__main__":
     test_max_pool2d()
     test_global_avg_pool2d()
     test_global_max_pool2d()
+    test_conv2d()
+    test_dense()
 
