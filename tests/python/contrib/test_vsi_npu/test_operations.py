@@ -5,15 +5,13 @@ import numpy as np
 from infrastructure import verify_vsi_result
 
 
-def _single_operation_test(relay_nn_func, dtype, data_shape, out_shape, *args):
+def _single_operation_test(relay_nn_func, dtype, data_shape, out_shape,
+        *args, **kargs):
     op_name = relay_nn_func.__name__.upper()
     print("Testing {0: <50}".format(op_name), end="")
     data = relay.var("data", shape=data_shape, dtype=dtype)
 
-    if args:
-        out = relay_nn_func(data, args)
-    else:
-        out = relay_nn_func(data)
+    out = relay_nn_func(data, *args, **kargs)
 
     args = relay.analysis.free_vars(out)
     net = relay.Function(args, out)
@@ -39,6 +37,23 @@ def test_global_max_pool2d():
     out_shape = (1, 20, 1, 1)
     _single_operation_test(func, dtype, data_shape, out_shape)
 
+def test_avg_pool2d():
+    func = relay.nn.avg_pool2d
+
+    dtype = "float32"
+    data_shape = (1, 1, 20, 20)
+    out_shape = (1, 1, 10, 10)
+    _single_operation_test(func, dtype, data_shape, out_shape, pool_size=(3, 3),
+            strides=(2, 2), padding=(1,1,1,1))
+
+def test_max_pool2d():
+    func = relay.nn.max_pool2d
+
+    dtype = "float32"
+    data_shape = (1, 1, 20, 20)
+    out_shape = (1, 1, 10, 10)
+    _single_operation_test(func, dtype, data_shape, out_shape, pool_size=(2, 2),
+            strides=(2, 2), padding=(0,0,0,0))
 
 def test_softmax():
     func = relay.nn.softmax
@@ -122,6 +137,8 @@ if __name__ == "__main__":
     test_add()
     test_relu()
     test_batch_flatten()
+    test_avg_pool2d()
+    test_max_pool2d()
     test_global_avg_pool2d()
     test_global_max_pool2d()
 
