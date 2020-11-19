@@ -45,6 +45,7 @@
 #include "ovxlibxx/operations/conv2d.h"
 #include "ovxlibxx/operations/batchnorm.h"
 #include "ovxlibxx/operations/add.h"
+#include "ovxlibxx/operations/permute.h"
 
 #include "vsi_utils.h"
 #endif
@@ -132,6 +133,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Pool2d(nid);
         } else if ("add" == op_name) {
           Add(nid);
+        } else if ("layout_transform" == op_name) {
+          Permute(nid);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -162,6 +165,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::vector<uint32_t> output_shape({data_size});
     auto flatten = graph_->CreateOperation<vsi::Reshape>(output_shape.data(), 1);
     (*flatten).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+    ops_.push_back(flatten);
   }
 
   void Dense(const size_t& nid) {
@@ -189,6 +193,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto weight_tensor = vsi_inputs[1];
     auto fc = graph_->CreateOperation<vsi::FullyConnected>(1, weight_tensor->GetShape()[1]);
     (*fc).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+    ops_.push_back(fc);
   }
 
   void Relu(const size_t& nid) {
@@ -208,7 +213,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     auto _op = graph_->CreateOperation<vsi::Relu>();
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
-
+    ops_.push_back(_op);
   }
 
   void Add(const size_t& nid) {
@@ -231,7 +236,31 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     auto add = graph_->CreateOperation<vsi::Add>();
     (*add).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+    ops_.push_back(add);
+  }
 
+  void Permute(const size_t& nid) {
+    auto node = nodes_[nid];
+    auto inputs = node.GetInputs();
+    std::string src_layout = node.GetAttr<std::vector<std::string>>("src_layout")[0];
+    std::string dst_layout = node.GetAttr<std::vector<std::string>>("dst_layout")[0];
+    std::vector<uint32_t> perm;
+
+    if (src_layout == "NHWC" && dst_layout == "NCHW"){
+        perm = {1, 2, 0, 3};
+    } else if (src_layout == "NCHW" && dst_layout == "NHWC") {
+        perm = {2, 0, 1, 3};
+    } else {
+        LOG(FATAL) << "Unsupported layout transform from " << src_layout << " to " << dst_layout;
+    }
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+    auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+    auto vsi_output =  MakeVSITensorFromJSONEntry(out_entry);
+
+    auto permute = graph_->CreateOperation<vsi::Permute>(perm);
+    (*permute).BindInput(vsi_input).BindOutput(vsi_output);
+    ops_.push_back(permute);
   }
 
   void BatchNorm(const size_t& nid) {
@@ -265,7 +294,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     auto bn = graph_->CreateOperation<vsi::BatchNorm>(epsilon);
     (*bn).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
-
+    ops_.push_back(bn);
   }
 
   void Pool2d(const size_t& nid) {
@@ -327,7 +356,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     auto pool = graph_->CreateOperation<vsi::Pool2d>(pool_type, vsi::PadType::AUTO, vsi_ksize, vsi_stride, vsi_pad, round_type);
     (*pool).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
-
+    ops_.push_back(pool);
   }
 
   void GlobalPool2d(const size_t& nid) {
@@ -363,7 +392,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     auto _op = graph_->CreateOperation<vsi::Pool2d>(pool_type, vsi::PadType::AUTO, ksize, stride, pad);
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
-
+    ops_.push_back(_op);
   }
 
   void Softmax(const size_t& nid) {
@@ -388,6 +417,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     //set beta to 1.0
     auto _op = graph_->CreateOperation<vsi::Softmax>(1.0f, axis_data_vsi);
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
+    ops_.push_back(_op);
   }
 
   void Conv2D(const size_t& nid) {
@@ -451,6 +481,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 		    vsi::PadType::AUTO, vsi_ksize, vsi_strides, vsi_dilation,
 		    vsi_pad, groups, vsi_multiplier);
     (*fc).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+    ops_.push_back(fc);
   }
 
 
@@ -563,6 +594,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   /* The entry ID to its corresponding output memory. */
   std::unordered_map<uint32_t, std::shared_ptr<vsi::Tensor>> entry_out_tensor_;
   std::vector<std::shared_ptr<vsi::Tensor>> dummy_tensor_;
+  std::vector<std::shared_ptr<vsi::Operation>> ops_;
 };
 
 #else

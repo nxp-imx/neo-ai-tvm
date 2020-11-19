@@ -73,6 +73,14 @@ _register_external_op_helper("nn.global_avg_pool2d")
 _register_external_op_helper("nn.global_max_pool2d")
 _register_external_op_helper("nn.batch_norm")
 
+@tvm.ir.register_op_attr("layout_transform", "target.vsi_npu")
+def layout_transform(attrs, args):
+    """Check if the external VSI codegen should be used."""
+    if attrs.src_layout == "NHWC" and attrs.dst_layout == "NCHW":
+        return True
+    if attrs.src_layout == "NCHW" and attrs.dst_layout == "NHWC":
+        return True
+    return False
 
 @register_pattern_table("vsi_npu")
 def vsi_npu_pattern_table():
@@ -127,8 +135,13 @@ def partition_for_vsi_npu(mod, params=None):
     if params:
         mod["main"] = bind_params_by_name(mod["main"], params)
 
+    desired_layouts = {'nn.conv2d': ['NCHW', 'OIHW']}
+
     seq = tvm.transform.Sequential(
         [
+            transform.RemoveUnusedFunctions(),
+            transform.ConvertLayout(desired_layouts),
+            transform.FoldConstant(),
             transform.MergeComposite(vsi_npu_pattern_table()),
             transform.AnnotateTarget("vsi_npu"),
             transform.MergeCompilerRegions(),
