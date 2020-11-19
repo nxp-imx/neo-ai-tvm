@@ -46,6 +46,7 @@
 #include "ovxlibxx/operations/batchnorm.h"
 #include "ovxlibxx/operations/add.h"
 #include "ovxlibxx/operations/permute.h"
+#include "ovxlibxx/operations/clip.h"
 
 #include "vsi_utils.h"
 #endif
@@ -115,8 +116,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         CHECK_EQ(node.GetOpType(), "kernel");
         auto op_name = node.GetOpName();
 	LOG(INFO) << "Build op: " << op_name;
-        if ("nn.batch_flatten" == op_name) {
-	  Flatten(nid);
+        if ("nn.batch_flatten" == op_name or "reshape" == op_name) {
+	  Reshape(nid);
         } else if ("nn.dense" == op_name) {
 	  Dense(nid);
         } else if ("nn.relu" == op_name) {
@@ -133,6 +134,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Pool2d(nid);
         } else if ("add" == op_name) {
           Add(nid);
+        } else if ("clip" == op_name) {
+          Clip(nid);
         } else if ("layout_transform" == op_name) {
           Permute(nid);
         } else {
@@ -144,28 +147,21 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     LOG(INFO) << "Build graph successfully" << std::endl;
   }
 
-  void Flatten(const size_t& nid) {
+  void Reshape(const size_t& nid) {
     auto node = nodes_[nid];
     JSONGraphNodeEntry out_entry(nid, 0);
     std::vector<JSONGraphNodeEntry> inputs = node.GetInputs();
 
     CHECK(inputs.size() == 1U) << "Flatten layer requires 1 inputs.";
 
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
-    vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0]));
-    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+    auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry);
 
-    std::vector<int64_t> tvm_shape = nodes_[inputs[0].id_].GetOpShape()[0];
-    uint32_t data_size = 1;
-    for (unsigned int i = 0; i < tvm_shape.size(); i ++) {
-      data_size *= tvm_shape[i];
-    }
+    std::vector<uint32_t> output_shape = vsi_output->GetShape();
 
-    std::vector<uint32_t> output_shape({data_size});
-    auto flatten = graph_->CreateOperation<vsi::Reshape>(output_shape.data(), 1);
-    (*flatten).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
-    ops_.push_back(flatten);
+    auto reshape = graph_->CreateOperation<vsi::Reshape>(output_shape);
+    (*reshape).BindInput(vsi_input).BindOutput(vsi_output);
+    ops_.push_back(reshape);
   }
 
   void Dense(const size_t& nid) {
@@ -237,6 +233,23 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto add = graph_->CreateOperation<vsi::Add>();
     (*add).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
     ops_.push_back(add);
+  }
+
+  void Clip(const size_t& nid) {
+    auto node = nodes_[nid];
+    auto inputs = node.GetInputs();
+    std::string min = node.GetAttr<std::vector<std::string>>("a_min")[0];
+    std::string max = node.GetAttr<std::vector<std::string>>("a_max")[0];
+
+    CHECK(inputs.size() == 1U) << "Clip layer requires 1 input.";
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+    auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+
+    auto clip = graph_->CreateOperation<vsi::Clip>(std::stof(min), std::stof(max));
+    (*clip).BindInput(vsi_input).BindOutput(vsi_output);
+    ops_.push_back(clip);
   }
 
   void Permute(const size_t& nid) {
