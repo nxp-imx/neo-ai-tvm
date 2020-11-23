@@ -184,6 +184,38 @@ def test_dense():
     mod, params = get_workload(data_shape, weight_shape, dtype)
     verify_vsi_result(mod, params, data_shape, out_shape, dtype)
 
+def test_concatenate():
+    dtype = "float32"
+    data_shape = (1, 20, 12)
+    out_shape = (1, 20, 24)
+
+    def get_workload(data_shape, dtype="float32"):
+        '''customized keywords(like data0,data1...) are not supported in \
+        relay.testing.init.create_workload
+        '''
+        data0 = relay.var("data", shape=data_shape, dtype=dtype)
+        data1 = relay.var("bias", shape=data_shape, dtype=dtype)
+
+        out = relay.concatenate([data0, data1], axis=-1)
+        args = relay.analysis.free_vars(out)
+        net = relay.Function(args, out)
+
+        return relay.testing.init.create_workload(net)
+
+    print("Testing {0: <50}".format("CONCATENATE"), end="")
+    mod, params = get_workload(data_shape, dtype)
+    verify_vsi_result(mod, params, data_shape, out_shape, dtype)
+
+
+def test_dropout():
+    func = relay.nn.dropout
+
+    dtype = "float32"
+    data_shape = (1, 20, 12, 9)
+    out_shape = data_shape
+    _single_operation_test(func, dtype, data_shape, out_shape, rate=0.5)
+
+
 if __name__ == "__main__":
     test_batch_norm()
     test_softmax()
@@ -196,4 +228,6 @@ if __name__ == "__main__":
     test_global_max_pool2d()
     test_conv2d()
     test_dense()
+    test_dropout()
+    test_concatenate()
 

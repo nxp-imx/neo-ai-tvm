@@ -47,6 +47,8 @@
 #include "ovxlibxx/operations/add.h"
 #include "ovxlibxx/operations/permute.h"
 #include "ovxlibxx/operations/clip.h"
+#include "ovxlibxx/operations/concat.h"
+#include "ovxlibxx/operations/dropout.h"
 
 #include "vsi_utils.h"
 #endif
@@ -138,6 +140,10 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Clip(nid);
         } else if ("layout_transform" == op_name) {
           Permute(nid);
+        } else if ("nn.dropout" == op_name) {
+          Dropout(nid);
+        } else if ("concatenate" == op_name) {
+          Concat(nid);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -431,6 +437,61 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto _op = graph_->CreateOperation<vsi::Softmax>(1.0f, axis_data_vsi);
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(_op);
+  }
+
+  void Dropout(const size_t& nid) {
+    auto node = nodes_[nid];
+    //JSONGraphNodeEntry input
+    auto inputs = node.GetInputs();
+
+    auto ratio_tvm = node.GetAttr<std::vector<std::string>>("rate")[0];
+    //auto shape_tvm = nodes_[inputs[0].id_].GetOpShape()[inputs[0].index_];
+
+    uint32_t ratio_vsi = 1;
+    //ratio_vsi = ConvertAxis(std::stoi(ratio_tvm), shape_tvm.size());
+    ratio_vsi = std::stoi(ratio_tvm);
+
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+
+    for (const auto& i : inputs) {
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
+    }
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+
+    auto dropout = graph_->CreateOperation<vsi::Dropout>(ratio_vsi);
+    (*dropout).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+    ops_.push_back(dropout);
+  }
+
+  void Concat(const size_t& nid) {
+    auto node = nodes_[nid];
+    //JSONGraphNodeEntry input
+    auto inputs = node.GetInputs();
+
+    auto axis_tvm = node.GetAttr<std::vector<std::string>>("axis")[0];
+    auto shape_tvm = nodes_[inputs[0].id_].GetOpShape()[inputs[0].index_];
+
+    uint32_t axis_vsi = 1;
+    axis_vsi = ConvertAxis(std::stoi(axis_tvm), shape_tvm.size());
+
+    auto input_cnt = inputs.size();
+
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+
+    for (const auto& i : inputs) {
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
+    }
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+
+    auto concat = graph_->CreateOperation<vsi::Concat>(axis_vsi, input_cnt);
+    (*concat).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+    ops_.push_back(concat);
   }
 
   void Conv2D(const size_t& nid) {
