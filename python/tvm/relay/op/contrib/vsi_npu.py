@@ -133,6 +133,12 @@ def vsi_npu_pattern_table():
         pattern = pattern.optional(lambda x: is_op("nn.bias_add")(x, is_constant()))
         return pattern
 
+    def qnn_avg_pool2d_pattern():
+        pattern = is_op("cast")(wildcard())
+        pattern = is_op("nn.avg_pool2d")(pattern)
+        pattern = is_op("cast")(pattern)
+        return pattern
+
     def qnn_softmax_pattern():
         pattern = is_op("qnn.dequantize")(wildcard(), is_constant(), is_constant())
         pattern = is_op("nn.softmax")(pattern)
@@ -144,6 +150,7 @@ def vsi_npu_pattern_table():
             ("vsi_npu.conv2d", conv_pattern()),
             ("vsi_npu.qnn_conv2d", qnn_conv_pattern()),
             ("vsi_npu.qnn_softmax", qnn_softmax_pattern()),
+            ("vsi_npu.qnn_avg_pool2d", qnn_avg_pool2d_pattern()),
             ]
     return vsi_npu_patterns
 

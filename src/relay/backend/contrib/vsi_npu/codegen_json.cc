@@ -81,6 +81,16 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
     const CallNode* quantize = nullptr;
   };
 
+  /*!
+   * \brief A series of operators that form a composite
+   * avg pool2d layer. Supports both qnn.avg_pool2d.
+   */
+  struct CompositeQnnAvgPool2DNode {
+    const CallNode* pre_cast = nullptr;
+    const CallNode* avg_pool2d = nullptr;
+    const CallNode* post_cast = nullptr;
+  };
+
   VsiNpuJSONSerializer(const std::string& symbol, const Expr& expr) : JSONSerializer(symbol, expr) {}
 
   std::vector<JSONGraphNodeEntry> VisitExpr_(const CallNode* cn) override {
@@ -135,6 +145,8 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
       json_node = CreateCompositeConvJSONNode(cn);
     } else if (name == "vsi_npu.qnn_softmax") {
       json_node = CreateCompositeQnnSoftmaxJSONNode(cn);
+    } else if (name == "vsi_npu.qnn_avg_pool2d") {
+      json_node = CreateCompositeAvgPool2DJSONNode(cn);
     } else {
       LOG(FATAL) << "Unrecognized VSI NPU pattern: " << name;
     }
@@ -143,6 +155,19 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
 #endif
   }
  private:
+  std::shared_ptr<JSONGraphNode> CreateCompositeAvgPool2DJSONNode(const CallNode* cn) {
+    CompositeQnnAvgPool2DNode nodes = UnpackCompositeQnnAvgPool2D(cn);
+    std::string name = "qnn.avg_pool2d";
+
+    // Inputs must be added in the same order they appear in the relay graph.
+    std::vector<JSONGraphNodeEntry> inputs;
+    inputs.push_back(VisitExpr(cn->args[0])[0]);
+
+    auto json_node = std::make_shared<JSONGraphNode>(name, "kernel", inputs, 1);
+    SetCallNodeAttribute(json_node, nodes.avg_pool2d);
+    return json_node;
+  }
+
   std::shared_ptr<JSONGraphNode> CreateCompositeQnnSoftmaxJSONNode(const CallNode* cn) {
     CompositeQnnSoftmaxNode nodes = UnpackCompositeQnnSoftmax(cn);
     std::string name = "qnn.softmax";
@@ -256,6 +281,30 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
 
     return json_node;
   }
+  /*!
+   * \brief Extract qnn.avg_pool2d nodes from a composite function.
+   *
+   * \param cn The call node of the composite function.
+   * \return Extracted composite convolution nodes.
+   */
+  static CompositeQnnAvgPool2DNode UnpackCompositeQnnAvgPool2D(const CallNode* cn) {
+    CompositeQnnAvgPool2DNode nodes{};
+    const auto* fn = cn->op.as<FunctionNode>();
+    CHECK(fn);
+
+    // Traverse composite dense function from child to parent
+    const auto* current_call = fn->body.as<CallNode>();
+    CHECK(backend::IsOp(current_call, "cast"));
+    nodes.post_cast = current_call;
+    current_call = current_call->args[0].as<CallNode>();
+    CHECK(backend::IsOp(current_call, "nn.avg_pool2d"));
+    nodes.avg_pool2d = current_call;
+    current_call = current_call->args[0].as<CallNode>();
+    CHECK(backend::IsOp(current_call, "cast"));
+    nodes.pre_cast = current_call;
+    return nodes;
+  }
+
   /*!
    * \brief Extract qnn.softmax nodes from a composite function.
    *

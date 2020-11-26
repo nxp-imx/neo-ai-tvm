@@ -132,7 +132,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Conv2D(nid);
         } else if (("nn.global_avg_pool2d" == op_name) || ("nn.global_max_pool2d" == op_name)) {
           GlobalPool2d(nid);
-        } else if (("nn.max_pool2d" == op_name) || ("nn.avg_pool2d" == op_name)) {
+        } else if ("nn.max_pool2d" == op_name || "nn.avg_pool2d" == op_name || "qnn.avg_pool2d" == op_name) {
           Pool2d(nid);
         } else if ("add" == op_name) {
           Add(nid);
@@ -161,7 +161,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     CHECK(inputs.size() == 1U) << "Flatten layer requires 1 inputs.";
 
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
-    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
 
     std::vector<uint32_t> output_shape = vsi_output->GetShape();
 
@@ -275,7 +275,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     JSONGraphNodeEntry out_entry(nid, 0);
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
-    auto vsi_output =  MakeVSITensorFromJSONEntry(out_entry);
+    auto vsi_output =  MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
 
     auto permute = graph_->CreateOperation<vsi::Permute>(perm);
     (*permute).BindInput(vsi_input).BindOutput(vsi_output);
@@ -345,7 +345,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     if (node.GetOpName() == "nn.max_pool2d") {
       pool_type = vsi::PoolType::MAX;
-    } else if (node.GetOpName() == "nn.avg_pool2d") {
+    } else if (node.GetOpName() == "nn.avg_pool2d" || node.GetOpName() == "qnn.avg_pool2d") {
       pool_type = vsi::PoolType::AVG;
     } else {
       LOG(FATAL) << "Pooling type not supported: " << node.GetOpName();
@@ -367,14 +367,11 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     vsi_pad.push_back(std::stoi(tvm_pad[0]));
     vsi_pad.push_back(std::stoi(tvm_pad[2]));
 
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
-
-    vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0]));
-    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+    auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
 
     auto pool = graph_->CreateOperation<vsi::Pool2d>(pool_type, vsi::PadType::AUTO, vsi_ksize, vsi_stride, vsi_pad, round_type);
-    (*pool).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+    (*pool).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(pool);
   }
 
@@ -602,6 +599,21 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   std::shared_ptr<vsi::Tensor> MakeVSITensorFromJSONEntry(const JSONGraphNodeEntry& tensor,
                                                  JSONGraphNodeEntry* scale = nullptr,
                                                  JSONGraphNodeEntry* offset = nullptr) {
+    vsi::Quantization vsi_quant;
+    if (scale != nullptr && offset != nullptr) {
+      auto scale_tensor = data_entry_[EntryID(*scale)];
+      auto offset_tensor = data_entry_[EntryID(*offset)];
+      std::vector<float> scale_data = GetVectorFromDLTensor<float>(scale_tensor);
+      std::vector<int> offset_data = GetVectorFromDLTensor<int>(offset_tensor);
+      CHECK(scale_data.size() == 1 && offset_data.size() == 1)
+            << "Currently only per-layer quantization is supported in the VSI runtime.";
+      vsi_quant = vsi::Quantization(vsi::QuantType::ASYMMETRIC, scale_data[0], offset_data[0]);
+    }
+
+    return MakeVSITensorFromJSONEntry(tensor, vsi_quant);
+  }
+  std::shared_ptr<vsi::Tensor> MakeVSITensorFromJSONEntry(const JSONGraphNodeEntry& tensor,
+                                                 const vsi::Quantization vsi_quant) {
     auto eid = EntryID(tensor);
 
     if (entry_out_tensor_.count(eid) != 0) {
@@ -624,7 +636,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       vsi_attr = vsi::TensorAttribute::TRANSIENT;
     }
 
-    auto vsi_tensor = MakeVSITensor(node, node_data, vsi_attr, scale, offset);
+    auto vsi_tensor = MakeVSITensor(node, node_data, vsi_attr, vsi_quant);
     entry_out_tensor_.insert({eid, vsi_tensor});
     return entry_out_tensor_[eid];
   }
@@ -643,8 +655,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
   std::shared_ptr<vsi::Tensor> MakeVSITensor(const JSONGraphNode& tensor_rep, void* data,
 				  vsi::TensorAttribute vsi_attr,
-                                  JSONGraphNodeEntry* scale = nullptr,
-                                  JSONGraphNodeEntry* offset = nullptr) {
+				  const vsi::Quantization vsi_quant) {
     //VSI parameter
     vsi::ShapeType vsi_shape;
     vsi::DataType vsi_dtype;
@@ -669,21 +680,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       LOG(FATAL) << "Unsupported data type.";
     }
 
-    // If scale and offset provided create quantized tensor.
-    vsi::TensorSpec input_spec;
-    if (scale != nullptr && offset != nullptr) {
-      auto scale_tensor = data_entry_[EntryID(*scale)];
-      auto offset_tensor = data_entry_[EntryID(*offset)];
-      std::vector<float> scale_data = GetVectorFromDLTensor<float>(scale_tensor);
-      std::vector<int> offset_data = GetVectorFromDLTensor<int>(offset_tensor);
-      CHECK(scale_data.size() == 1 && offset_data.size() == 1)
-            << "Currently only per-layer quantization is supported in the VSI runtime.";
-      vsi::Quantization vsi_quant(vsi::QuantType::ASYMMETRIC, scale_data[0], offset_data[0]);
-      input_spec = vsi::TensorSpec(vsi_dtype, vsi_shape, vsi_attr, vsi_quant);
-    } else {
-      input_spec = vsi::TensorSpec(vsi_dtype, vsi_shape, vsi_attr);
-    }
-
+    auto input_spec = vsi::TensorSpec(vsi_dtype, vsi_shape, vsi_attr, vsi_quant);
     std::shared_ptr<vsi::Tensor> tensor;
     if (data != nullptr)
       tensor = graph_->CreateTensor(input_spec, data);
