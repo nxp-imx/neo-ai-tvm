@@ -193,6 +193,8 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
     if (nodes.requantize) {
       inputs.push_back(VisitExpr(nodes.requantize->args[3])[0]);  // output scale
       inputs.push_back(VisitExpr(nodes.requantize->args[4])[0]);  // output zero-point
+      inputs.push_back(VisitExpr(nodes.requantize->args[1])[0]);  // bias scale
+      inputs.push_back(VisitExpr(nodes.requantize->args[2])[0]);  // bias zero-point
     }
 
     auto json_node = std::make_shared<JSONGraphNode>(name, "kernel", inputs, 1);
@@ -274,7 +276,7 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
       nodes.requantize = current_call;
       current_call = current_call->args[0].as<CallNode>();
     }
-    if (backend::IsOp(current_call, "nn.bias_add")) {
+    if (backend::IsOp(current_call, "nn.bias_add") || backend::IsOp(current_call, "add")) {
       nodes.bias = current_call;
       current_call = current_call->args[0].as<CallNode>();
     }
@@ -288,6 +290,7 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
     if (!current_call->args.empty() && current_call->args[0]->IsInstance<CallNode>()) {
       current_call = current_call->args[0].as<CallNode>();
       if (backend::IsOp(current_call, "nn.pad")) {
+        nodes.pad = current_call;
       }
     }
     return nodes;

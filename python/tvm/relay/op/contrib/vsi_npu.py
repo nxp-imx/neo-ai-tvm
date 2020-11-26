@@ -80,7 +80,7 @@ _register_external_op_helper("concatenate")
 @tvm.ir.register_op_attr("layout_transform", "target.vsi_npu")
 def layout_transform(attrs, args):
     """Check if the external VSI codegen should be used."""
-    if attrs.src_layout == "NHWC" and attrs.dst_layout == "NCHW":
+    if attrs.src_layout == "NHWC" and attrs.dst_layout == "NCHW" and args[0].checked_type.dtype != "uint8":
         return True
     if attrs.src_layout == "NCHW" and attrs.dst_layout == "NHWC":
         return True
@@ -103,6 +103,24 @@ def vsi_npu_pattern_table():
         pattern = pattern.optional(lambda x: is_op("nn.bias_add")(x, is_constant()))
         return pattern
 
+    def qnn_conv_pattern():
+        """Create a quantized convolution pattern.
+
+        Returns
+        -------
+        pattern : dataflow_pattern.AltPattern
+            Denotes the convolution pattern.
+        """
+        pattern = is_op("nn.pad")(wildcard()) | wildcard()
+        pattern = is_op("qnn.conv2d")(
+            pattern, is_constant(), is_constant(), is_constant(), is_constant(), is_constant()
+        )
+        pattern = pattern.optional(lambda x: (is_op("nn.bias_add")(x, is_constant()) | is_op("add")(x, is_constant())))
+        pattern = is_op("qnn.requantize")(
+            pattern, is_constant(), is_constant(), is_constant(), is_constant()
+        )
+        return pattern
+
     def dense_pattern():
         """Create a dense (fully-connected) pattern.
 
@@ -118,6 +136,7 @@ def vsi_npu_pattern_table():
     vsi_npu_patterns = [
             ("vsi_npu.dense", dense_pattern()),
             ("vsi_npu.conv2d", conv_pattern()),
+            ("vsi_npu.qnn_conv2d", qnn_conv_pattern()),
             ]
     return vsi_npu_patterns
 
@@ -139,7 +158,8 @@ def partition_for_vsi_npu(mod, params=None):
     if params:
         mod["main"] = bind_params_by_name(mod["main"], params)
 
-    desired_layouts = {'nn.conv2d': ['NCHW', 'OIHW']}
+    desired_layouts = {'nn.conv2d' : ['NCHW', 'OIHW'],
+                       'qnn.conv2d': ['NCHW', 'OIHW']}
 
     seq = tvm.transform.Sequential(
         [

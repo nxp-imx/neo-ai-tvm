@@ -26,7 +26,8 @@
 #define TVM_RUNTIME_CONTRIB_VSI_NPU_VSI_UTILS_H_
 
 //Convert axis to VSI NPU axis
-inline int32_t ConvertAxis(int32_t axis_in, uint64_t dim_num) {
+static inline int32_t
+ConvertAxis(int32_t axis_in, uint64_t dim_num) {
     if (axis_in < 0) {
         return -axis_in - 1;
     } else {
@@ -34,5 +35,16 @@ inline int32_t ConvertAxis(int32_t axis_in, uint64_t dim_num) {
     }
 }
 
+template <typename T>
+static inline std::vector<T>
+GetVectorFromDLTensor(const DLTensor* tensor) {
+  CHECK(tensor) << "Cannot convert a nullptr";
+  int len = 1;
+  for (int i = 0; i < tensor->ndim; i++) {
+    len *= tensor->shape[i];
+  }
+  T* data = static_cast<T*>(tensor->data);
+  return std::vector<T>(data, data + len);
+}
 
 #endif  // TVM_RUNTIME_CONTRIB_VSI_NPU_VSI_UTILS_H_

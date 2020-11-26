@@ -128,7 +128,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Softmax(nid);
         } else if ("nn.batch_norm" == op_name) {
           BatchNorm(nid);
-        } else if ("nn.conv2d" == op_name) {
+        } else if ("nn.conv2d" == op_name || "qnn.conv2d" == op_name) {
           Conv2D(nid);
         } else if (("nn.global_avg_pool2d" == op_name) || ("nn.global_max_pool2d" == op_name)) {
           GlobalPool2d(nid);
@@ -509,13 +509,21 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
     size_t num_inputs = inputs.size();
     JSONGraphNodeEntry out_entry(nid, 0);
-
+    bool has_bias;
     if (node.GetOpName() == "qnn.conv2d") {
-      CHECK(num_inputs >= 8U && num_inputs <= 9U)
-          << "Quantized convolution requires 9 inputs with a bias, 8 inputs without.";
+      CHECK(num_inputs >= 10U && num_inputs <= 11U)
+          << "Quantized convolution requires 11 inputs with a bias, 9 inputs without.";
+      has_bias = num_inputs == 11;
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0], &inputs[4], &inputs[2]));
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[1], &inputs[5], &inputs[3]));
+      if (has_bias) {
+        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[6], &inputs[9], &inputs[10]));
+      }
+      vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry, &inputs[6 + has_bias], &inputs[7 + has_bias]));
     } else {
       CHECK(num_inputs >= 2U && num_inputs <= 3U)
           << "Convolution requires 3 inputs with a bias, 2 inputs without.";
+      has_bias = num_inputs == 3;
       for (const auto& i : inputs) {
         vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
       }
@@ -542,7 +550,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     vsi_ksize.push_back(weight_tensor->GetShape()[0]);
     vsi_ksize.push_back(weight_tensor->GetShape()[1]);
 
-    if (vsi_inputs.size() == 2) {
+    if (!has_bias) {
       vsi_inputs.push_back(MakeDummyBiasTensor(vsi_inputs[0]->GetDataType(),
 			      {weight_tensor->GetShape()[3]}));
     }
@@ -551,11 +559,11 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       vsi_multiplier = static_cast<int32_t>(weight_tensor->GetShape()[2]);
     }
 
-    auto fc = graph_->CreateOperation<vsi::Conv2d>(static_cast<int32_t>(weight_tensor->GetShape()[3]),
+    auto conv = graph_->CreateOperation<vsi::Conv2d>(static_cast<int32_t>(weight_tensor->GetShape()[3]),
 		    vsi::PadType::AUTO, vsi_ksize, vsi_strides, vsi_dilation,
 		    vsi_pad, groups, vsi_multiplier);
-    (*fc).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
-    ops_.push_back(fc);
+    (*conv).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+    ops_.push_back(conv);
   }
 
 
@@ -643,18 +651,32 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     if (tvm_dtype.code == DLDataTypeCode::kDLFloat && tvm_dtype.bits == 32) {
       vsi_dtype = vsi::DataType::FLOAT32;
+      std::cout << "vsi::DataType::FLOAT32" << std::endl;
     } else if (tvm_dtype.code == DLDataTypeCode::kDLUInt && tvm_dtype.bits == 8) {
       vsi_dtype = vsi::DataType::UINT8;
+      std::cout << "vsi::DataType::UINT8" << std::endl;
+    } else if (tvm_dtype.code == DLDataTypeCode::kDLInt && tvm_dtype.bits == 32) {
+      vsi_dtype = vsi::DataType::INT32;
+      std::cout << "vsi::DataType::INT32" << std::endl;
     } else {
-      vsi_dtype = vsi::DataType::FLOAT32;
+      LOG(FATAL) << "Unsupported data type.";
     }
 
     // If scale and offset provided create quantized tensor.
+    vsi::TensorSpec input_spec;
     if (scale != nullptr && offset != nullptr) {
-	    //qnn tensor
+      auto scale_tensor = data_entry_[EntryID(*scale)];
+      auto offset_tensor = data_entry_[EntryID(*offset)];
+      std::vector<float> scale_data = GetVectorFromDLTensor<float>(scale_tensor);
+      std::vector<int> offset_data = GetVectorFromDLTensor<int>(offset_tensor);
+      CHECK(scale_data.size() == 1 && offset_data.size() == 1)
+            << "Currently only per-layer quantization is supported in the VSI runtime.";
+      vsi::Quantization vsi_quant(vsi::QuantType::ASYMMETRIC, scale_data[0], offset_data[0]);
+      input_spec = vsi::TensorSpec(vsi_dtype, vsi_shape, vsi_attr, vsi_quant);
+    } else {
+      input_spec = vsi::TensorSpec(vsi_dtype, vsi_shape, vsi_attr);
     }
 
-    vsi::TensorSpec input_spec(vsi_dtype, vsi_shape, vsi_attr);
     std::shared_ptr<vsi::Tensor> tensor;
     if (data != nullptr)
       tensor = graph_->CreateTensor(input_spec, data);
