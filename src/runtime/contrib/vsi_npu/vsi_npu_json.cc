@@ -124,7 +124,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 	  Dense(nid);
         } else if ("nn.relu" == op_name) {
           Relu(nid);
-        } else if ("nn.softmax" == op_name) {
+        } else if ("nn.softmax" == op_name || "qnn.softmax" == op_name) {
           Softmax(nid);
         } else if ("nn.batch_norm" == op_name) {
           BatchNorm(nid);
@@ -417,10 +417,10 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
   void Softmax(const size_t& nid) {
     auto node = nodes_[nid];
     //JSONGraphNodeEntry input
-    auto data_entry = node.GetInputs()[0];
+    auto inputs = node.GetInputs();
     //softmax aixs
     auto axis_data_tvm = node.GetAttr<std::vector<std::string>>("axis")[0];
-    auto shape_tvm = nodes_[data_entry.id_].GetOpShape()[data_entry.index_];
+    auto shape_tvm = nodes_[inputs[0].id_].GetOpShape()[inputs[0].index_];
     uint32_t axis_data_vsi = 1;
 
     axis_data_vsi = ConvertAxis(std::stoi(axis_data_tvm), shape_tvm.size());
@@ -429,9 +429,16 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     std::shared_ptr<vsi::Tensor> vsi_input;
     std::shared_ptr<vsi::Tensor> vsi_output;
-
-    vsi_input = MakeVSITensorFromJSONEntry(data_entry);
-    vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+    std::cout << "inputs.size" << inputs.size() << std::endl;
+    CHECK(inputs.size() == 1U || inputs.size() == 5U)
+          << "Softmax requires 5 inputs with quantization, 1 inputs without.";
+    if (inputs.size() == 5) {
+      vsi_input = MakeVSITensorFromJSONEntry(inputs[0], &inputs[1], &inputs[2]);
+      vsi_output = MakeVSITensorFromJSONEntry(out_entry, &inputs[3], &inputs[4]);
+    } else {
+      vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+      vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+    }
 
     //set beta to 1.0
     auto _op = graph_->CreateOperation<vsi::Softmax>(1.0f, axis_data_vsi);

@@ -71,6 +71,16 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
     const CallNode* requantize = nullptr;
   };
 
+  /*!
+   * \brief A series of operators that form a composite
+   * softmax layer. Supports both qnn.softmax.
+   */
+  struct CompositeQnnSoftmaxNode {
+    const CallNode* dequantize = nullptr;
+    const CallNode* softmax = nullptr;
+    const CallNode* quantize = nullptr;
+  };
+
   VsiNpuJSONSerializer(const std::string& symbol, const Expr& expr) : JSONSerializer(symbol, expr) {}
 
   std::vector<JSONGraphNodeEntry> VisitExpr_(const CallNode* cn) override {
@@ -123,6 +133,8 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
       json_node = CreateCompositeDenseJSONNode(cn);
     } else if (name == "vsi_npu.conv2d" || name == "vsi_npu.qnn_conv2d") {
       json_node = CreateCompositeConvJSONNode(cn);
+    } else if (name == "vsi_npu.qnn_softmax") {
+      json_node = CreateCompositeQnnSoftmaxJSONNode(cn);
     } else {
       LOG(FATAL) << "Unrecognized VSI NPU pattern: " << name;
     }
@@ -131,6 +143,23 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
 #endif
   }
  private:
+  std::shared_ptr<JSONGraphNode> CreateCompositeQnnSoftmaxJSONNode(const CallNode* cn) {
+    CompositeQnnSoftmaxNode nodes = UnpackCompositeQnnSoftmax(cn);
+    std::string name = "qnn.softmax";
+
+    // Inputs must be added in the same order they appear in the relay graph.
+    std::vector<JSONGraphNodeEntry> inputs;
+    inputs.push_back(VisitExpr(cn->args[0])[0]);
+    inputs.push_back(VisitExpr(nodes.dequantize->args[1])[0]);  // input scale
+    inputs.push_back(VisitExpr(nodes.dequantize->args[2])[0]);  // input zero-point
+    inputs.push_back(VisitExpr(nodes.quantize->args[1])[0]);  // output scale
+    inputs.push_back(VisitExpr(nodes.quantize->args[2])[0]);  // output zero-point
+
+    auto json_node = std::make_shared<JSONGraphNode>(name, "kernel", inputs, 1);
+    SetCallNodeAttribute(json_node, nodes.softmax);
+    return json_node;
+  }
+
     std::shared_ptr<JSONGraphNode> CreateCompositeDenseJSONNode(const CallNode* cn) {
     CompositeDenseNode nodes = UnpackCompositeDense(cn);
     std::string name = "nn.dense";
@@ -226,6 +255,29 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
     json_node->SetAttr("is_depthwise", depthwise_attr);
 
     return json_node;
+  }
+  /*!
+   * \brief Extract qnn.softmax nodes from a composite function.
+   *
+   * \param cn The call node of the composite function.
+   * \return Extracted composite convolution nodes.
+   */
+  static CompositeQnnSoftmaxNode UnpackCompositeQnnSoftmax(const CallNode* cn) {
+    CompositeQnnSoftmaxNode nodes{};
+    const auto* fn = cn->op.as<FunctionNode>();
+    CHECK(fn);
+
+    // Traverse composite dense function from child to parent
+    const auto* current_call = fn->body.as<CallNode>();
+    CHECK(backend::IsOp(current_call, "qnn.quantize"));
+    nodes.quantize = current_call;
+    current_call = current_call->args[0].as<CallNode>();
+    CHECK(backend::IsOp(current_call, "nn.softmax"));
+    nodes.softmax = current_call;
+    current_call = current_call->args[0].as<CallNode>();
+    CHECK(backend::IsOp(current_call, "qnn.dequantize"));
+    nodes.dequantize = current_call;
+    return nodes;
   }
 
   /*!
