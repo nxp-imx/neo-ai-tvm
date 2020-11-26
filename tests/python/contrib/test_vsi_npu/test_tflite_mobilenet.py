@@ -16,6 +16,12 @@ from tvm.contrib.download import download_testdata
 RPC_HOST = "10.193.20.6"
 RPC_PORT = 9090
 TMP_PATH = util.tempdir()
+IS_QUANT = False
+
+if (IS_QUANT):
+    DTYPE = "uint8"
+else:
+    DTYPE = "float32"
 
 def extract(path):
     import tarfile
@@ -29,8 +35,8 @@ def extract(path):
         raise RuntimeError("Could not decompress the file: " + path)
 
 
-def get_tflite_model(is_quant):
-    if (is_quant):
+def get_tflite_model():
+    if (IS_QUANT):
         name_prefix = "mobilenet_v1_1.0_224_quant"
     else:
         name_prefix = "mobilenet_v1_1.0_224"
@@ -74,30 +80,30 @@ def get_tflite_model(is_quant):
     # TFLite input tensor name, shape and type
     inputs = "input"
     shape = (1, 224, 224, 3)
-    dtype = "float32"
-    return inputs, shape, dtype, labels, model
+    return inputs, shape, labels, model
 
 
-def get_img_data():
+def get_img_data(shape):
     image_url = "https://github.com/dmlc/mxnet.js/blob/main/data/cat.png?raw=true"
     image_path = download_testdata(image_url, "cat.png", module="data")
-    resized_image = Image.open(image_path).resize((224, 224))
-    image_data = np.asarray(resized_image).astype("float32")
+    resized_image = Image.open(image_path).resize(shape)
+    image_data = np.asarray(resized_image).astype(DTYPE)
 
     # Add a dimension to the image so that we have NHWC format layout
     image_data = np.expand_dims(image_data, axis=0)
 
-    # Preprocess image as described here:
-    # https://github.com/tensorflow/models/blob/edb6ed22a801665946c63d650ab9a0b23d98e1b1/research/slim/preprocessing/inception_preprocessing.py#L243
-    image_data[:, :, :, 0] = 2.0 / 255.0 * image_data[:, :, :, 0] - 1
-    image_data[:, :, :, 1] = 2.0 / 255.0 * image_data[:, :, :, 1] - 1
-    image_data[:, :, :, 2] = 2.0 / 255.0 * image_data[:, :, :, 2] - 1
+    if (IS_QUANT == False):
+        # Preprocess image as described here:
+        # https://github.com/tensorflow/models/blob/edb6ed22a801665946c63d650ab9a0b23d98e1b1/research/slim/preprocessing/inception_preprocessing.py#L243
+        image_data[:, :, :, 0] = 2.0 / 255.0 * image_data[:, :, :, 0] - 1
+        image_data[:, :, :, 1] = 2.0 / 255.0 * image_data[:, :, :, 1] - 1
+        image_data[:, :, :, 2] = 2.0 / 255.0 * image_data[:, :, :, 2] - 1
     return image_data
 
-def compile_tflite_model(inputs, shape, dtype, model):
+def compile_tflite_model(inputs, shape, model):
     # Parse TFLite model and convert it to a Relay module
     mod, params = relay.frontend.from_tflite(
-        model, shape_dict={inputs: shape}, dtype_dict={inputs: dtype}
+        model, shape_dict={inputs: shape}, dtype_dict={inputs: DTYPE}
     )
     lib_name = "mobilenet.so"
     lib_path = TMP_PATH.relpath(lib_name)
@@ -131,9 +137,9 @@ def inference_remotely(lib_path, image_data):
     return tvm_output
 
 
-inputs, shape, dtype, labels, model = get_tflite_model(is_quant = False)
-image_data = get_img_data()
-lib_path = compile_tflite_model(inputs, shape, dtype, model)
+inputs, shape, labels, model = get_tflite_model()
+image_data = get_img_data(shape[1:3])
+lib_path = compile_tflite_model(inputs, shape, model)
 tvm_output = inference_remotely(lib_path, image_data)
 
 # Convert result to 1D data
