@@ -8,9 +8,9 @@ from tvm.contrib import util
 
 RPC_HOST = "10.193.20.6"
 RPC_PORT = 9090
-CROSS_CC = "/opt/cross_compile/bin/aarch64-none-linux-gnu-g++"
+CROSS_CC = "aarch64-linux-gnu-gcc"
 
-def get_vsi_result(data, mod, params, out_shape, dtype):
+def get_vsi_model(mod, params):
     remote = rpc.connect(RPC_HOST, RPC_PORT)
     tmp_path = util.tempdir()
     lib_name = "model.so"
@@ -29,11 +29,28 @@ def get_vsi_result(data, mod, params, out_shape, dtype):
     ctx = remote.cpu()
 
     rt_mod = graph_runtime.GraphModule(lib["default"](ctx))
+    return rt_mod, ctx
+
+def get_vsi_result(data, mod, params, out_shape, dtype):
+    rt_mod, ctx = get_vsi_model(mod, params)
     rt_mod.set_input("data", data)
     rt_mod.run()
     rt_out = tvm.nd.array(np.zeros(out_shape, dtype=dtype), ctx)
     rt_mod.get_output(0, rt_out)
+
     return rt_out
+
+def benchmark_vsi(mod, params, repeat=50):
+    rt_mod, ctx = get_vsi_model(mod, params)
+
+    print("Evaluate graph runtime inference cost on VSI NPU")
+    ftimer = rt_mod.module.time_evaluator("run", ctx, number=1, repeat=repeat)
+    # Measure in millisecond.
+    prof_res = np.array(ftimer().results) * 1000
+    print("VSI NPU runtime inference time (std dev): %.2f ms (%.2f ms)"
+            % (np.mean(prof_res), np.std(prof_res)))
+
+    return np.mean(prof_res)
 
 def get_ref_result(data, mod, params, out_shape, dtype):
     target = "llvm"
