@@ -142,7 +142,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Permute(nid);
         } else if ("nn.dropout" == op_name) {
           Dropout(nid);
-        } else if ("concatenate" == op_name) {
+        } else if ("concatenate" == op_name || "qnn.concatenate" == op_name) {
           Concat(nid);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
@@ -486,12 +486,23 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
     std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
 
-    for (const auto& i : inputs) {
-      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
-    }
-
     JSONGraphNodeEntry out_entry(nid, 0);
-    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+    if (node.GetOpName() == "qnn.concatenate") {
+      input_cnt = (input_cnt - 2) / 3; //Each input has 3 tensor(data, scale, offset)
+      for (size_t j = 0; j < input_cnt; j ++) {
+        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[j],
+			       	                        &inputs[j + input_cnt],
+						       	&inputs[j + input_cnt * 2]));
+      }
+      vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry,
+			                               &inputs[input_cnt * 3],
+						       &inputs[input_cnt * 3 + 1]));
+    } else {
+      for (const auto& i : inputs) {
+        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
+      }
+      vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+    }
 
     auto concat = graph_->CreateOperation<vsi::Concat>(axis_vsi, input_cnt);
     (*concat).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
