@@ -17,6 +17,10 @@ RPC_HOST = "10.193.20.6"
 RPC_PORT = 9090
 TMP_PATH = util.tempdir()
 IS_QUANT = False
+MEASURE_PERF = False
+
+MODEL_VERSION = "v1_1.0"
+MODEL_SIZE = 224
 
 if (IS_QUANT):
     DTYPE = "uint8"
@@ -37,11 +41,14 @@ def extract(path):
 
 def get_tflite_model():
     if (IS_QUANT):
-        name_prefix = "mobilenet_v1_1.0_224_quant"
+        name_prefix = "mobilenet_%s_%d_quant" % (MODEL_VERSION, MODEL_SIZE)
     else:
-        name_prefix = "mobilenet_v1_1.0_224"
+        name_prefix = "mobilenet_%s_%d" % (MODEL_VERSION, MODEL_SIZE)
 
     model_url = "http://download.tensorflow.org/models/mobilenet_v1_2018_08_02/" + name_prefix + ".tgz"
+    if MODEL_VERSION[0:2] == "v2":
+        model_url = "https://storage.googleapis.com/download.tensorflow.org/models/tflite_11_05_08/"\
+                     + name_prefix + ".tgz"
 
     # Download model tar file and extract it to get mobilenet_v1_1.0_224.tflite
     model_path = download_testdata(model_url, name_prefix + ".tgz", module=["tf", "official"])
@@ -62,15 +69,15 @@ def get_tflite_model():
 
 
     # Load label file
+    label_file = "labels_mobilenet_quant_v1_224.txt"
     label_file_url = "".join(
         [
             "https://raw.githubusercontent.com/",
             "tensorflow/tensorflow/master/tensorflow/lite/java/demo/",
             "app/src/main/assets/",
-            "labels_mobilenet_quant_v1_224.txt",
+            label_file,
         ]
     )
-    label_file = "labels_mobilenet_quant_v1_224.txt"
     label_path = download_testdata(label_file_url, label_file, module="data")
 
     # List of 1001 classes
@@ -79,7 +86,7 @@ def get_tflite_model():
 
     # TFLite input tensor name, shape and type
     inputs = "input"
-    shape = (1, 224, 224, 3)
+    shape = (1, MODEL_SIZE, MODEL_SIZE, 3)
     return inputs, shape, labels, model
 
 
@@ -129,12 +136,44 @@ def inference_remotely(lib_path, image_data):
     module = graph_runtime.GraphModule(lib["default"](ctx))
     # Feed input data
     module.set_input(inputs, tvm.nd.array(image_data))
+
+    if MEASURE_PERF:
+        print("Evaluate graph runtime inference cost on VSI NPU")
+        ftimer = module.module.time_evaluator("run", ctx, number=1, repeat=50)
+        # Measure in millisecond.
+        prof_res = np.array(ftimer().results) * 1000
+        print("VSI NPU runtime inference time (std dev): %.2f ms (%.2f ms)"
+                % (np.mean(prof_res), np.std(prof_res)))
     # Run
     module.run()
     # Get output
     tvm_output = module.get_output(0).asnumpy()
 
     return tvm_output
+
+def get_ref_result(inputs, shape, model, image_data):
+    mod, params = relay.frontend.from_tflite(
+        model, shape_dict={inputs: shape}, dtype_dict={inputs: DTYPE}
+    )
+    target = "llvm"
+    with tvm.transform.PassContext(opt_level=3, disabled_pass=["AlterOpLayout"]):
+        lib  = relay.build(mod, target, params=params)
+
+    ctx = tvm.cpu()
+    cpu_mod = graph_runtime.GraphModule(lib["default"](ctx))
+    cpu_mod.set_input(inputs, tvm.nd.array(image_data))
+
+    if MEASURE_PERF:
+        print("Evaluate graph runtime inference cost on CPU")
+        ftimer = cpu_mod.module.time_evaluator("run", ctx, number=1, repeat=1)
+        # Measure in millisecond.
+        prof_res = np.array(ftimer().results) * 1000
+        print("CPU runtime inference time (std dev): %.2f ms (%.2f ms)"
+                % (np.mean(prof_res), np.std(prof_res)))
+
+    cpu_mod.run()
+    ref_out = cpu_mod.get_output(0).asnumpy()
+    return ref_out
 
 
 inputs, shape, labels, model = get_tflite_model()
