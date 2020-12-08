@@ -134,7 +134,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           GlobalPool2d(nid);
         } else if ("nn.max_pool2d" == op_name || "nn.avg_pool2d" == op_name || "qnn.avg_pool2d" == op_name) {
           Pool2d(nid);
-        } else if ("add" == op_name) {
+        } else if ("add" == op_name || "qnn.add" == op_name) {
           Add(nid);
         } else if ("clip" == op_name) {
           Clip(nid);
@@ -230,11 +230,22 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
     std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
 
-    for (const auto& i : inputs) {
-      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
-    }
+    auto input_cnt = inputs.size();
 
-    vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+    if (node.GetOpName() == "qnn.add") {
+      input_cnt = (input_cnt - 2) / 3; //Each input has 3 tensor(data, scale, offset)
+      for (size_t j = 0; j < input_cnt; j ++) {
+        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[j],
+                   &inputs[j + input_cnt], &inputs[j + input_cnt * 2]));
+      }
+      vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry,
+                   &inputs[input_cnt * 3], &inputs[input_cnt * 3 + 1]));
+    } else {
+      for (const auto& i : inputs) {
+        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
+      }
+      vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
+    }
 
     auto add = graph_->CreateOperation<vsi::Add>();
     (*add).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);

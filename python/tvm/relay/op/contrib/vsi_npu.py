@@ -77,6 +77,7 @@ _register_external_op_helper("nn.batch_norm")
 _register_external_op_helper("nn.dropout")
 _register_external_op_helper("concatenate")
 _register_external_op_helper("qnn.concatenate")
+_register_external_op_helper("qnn.add")
 
 @tvm.ir.register_op_attr("layout_transform", "target.vsi_npu")
 def layout_transform(attrs, args):

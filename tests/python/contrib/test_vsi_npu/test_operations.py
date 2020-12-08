@@ -215,8 +215,33 @@ def test_dropout():
     out_shape = data_shape
     _single_operation_test(func, dtype, data_shape, out_shape, rate=0.5)
 
+def test_qnn_add():
+    data_dtype = "uint8"
+    data_shape = (1, 20, 4, 8)
+    out_shape = (1, 20, 4, 8)
+
+    x = relay.var("data", shape=data_shape, dtype=data_dtype)
+    y = relay.var("weight", shape=data_shape, dtype=data_dtype)
+    out = relay.qnn.op.add(
+        lhs=x,
+        rhs=y,
+        lhs_scale=relay.const(0.00784314, "float32"),
+        lhs_zero_point=relay.const(127, "int32"),
+        rhs_scale=relay.const(0.00784314, "float32"),
+        rhs_zero_point=relay.const(127, "int32"),
+        output_scale=relay.const(0.00784314, "float32"),
+        output_zero_point=relay.const(127, "int32"),
+    )
+    args = relay.analysis.free_vars(out)
+    net = relay.Function(args, out)
+
+    print("Testing {0: <50}".format("QNN.ADD"), end="")
+    mod, params = relay.testing.init.create_workload(net)
+    verify_vsi_result(mod, params, data_shape, out_shape, data_dtype)
+
 
 if __name__ == "__main__":
+    test_qnn_add()
     test_batch_norm()
     test_softmax()
     test_add()
