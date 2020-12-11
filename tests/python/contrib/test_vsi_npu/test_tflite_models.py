@@ -82,6 +82,11 @@ def init_supported_models():
     add_supported_model("inception_v2_224", where, QUANT, suffix="_20181026")
     add_supported_model("inception_v4_299", where, QUANT, suffix="_20181026")
 
+    # where = "https://storage.googleapis.com/download.tensorflow.org/"
+    # where += "models/tflite/model_zoo/upload_20180427"
+    # add_supported_model("inception_v3", where, suffix="_20180427")
+    # add_supported_model("inception_v4", where, suffix="_20180427")
+
     return SUPPORTED_MODELS
 
 
@@ -258,20 +263,21 @@ for model_name, m in models_to_run.items():
     shape = (1, input_size, input_size, 3)
 
     image_data = get_img_data(shape[1:3], is_quant)
-#    lib_path = compile_tflite_model(inputs, shape, model_name)
-#    tvm_output = inference_remotely(lib_path, image_data)
-    tvm_output = get_ref_result(inputs, shape, model_name, image_data)
-
-    # Convert result to 1D data
-    predictions = np.squeeze(tvm_output)
+    ref_output = get_ref_result(inputs, shape, model_name, image_data)
 
     # Get top 1 prediction
-    prediction = np.argmax(predictions)
-    EXPECT_RET = 283
-    if (prediction == EXPECT_RET):
-        print("Passed")
-    else:
-        print("Failed")
+    idx = np.argmax(np.squeeze(ref_output))
 
-    # Convert id to class name and show the result
-    print("Get prediction result: id " + str(prediction))
+    try:
+        lib_path = compile_tflite_model(inputs, shape, model_name)
+        tvm_output = inference_remotely(lib_path, image_data)
+        out_idx = np.argmax(np.squeeze(tvm_output))
+    except Exception as err:
+        print("\nExpect predict id {}, got {}".format(idx, err))
+        print("FAIL")
+    else:
+        print("\nExpect predict id {}, got {}".format(idx, out_idx))
+        if (idx == out_idx):
+            print("PASS")
+        else:
+            print("FAIL")
