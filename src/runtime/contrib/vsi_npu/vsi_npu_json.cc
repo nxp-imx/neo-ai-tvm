@@ -120,7 +120,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 	LOG(INFO) << "Build op: " << op_name;
         if ("nn.batch_flatten" == op_name or "reshape" == op_name) {
 	  Reshape(nid);
-        } else if ("nn.dense" == op_name) {
+        } else if ("nn.dense" == op_name or "qnn.dense" == op_name) {
 	  Dense(nid);
         } else if ("nn.relu" == op_name) {
           Relu(nid);
@@ -180,9 +180,18 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
     std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
 
+    bool has_bias;
     if (node.GetOpName() == "qnn.dense") {
-	    //qnn.dense
-	    
+      //qnn.densn
+      CHECK(num_inputs >= 10U && num_inputs <= 11U)
+          << "Quantized convolution requires 11 inputs with a bias, 9 inputs without.";
+      has_bias = num_inputs == 11;
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0], &inputs[4], &inputs[2]));
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[1], &inputs[5], &inputs[3]));
+      if (has_bias) {
+        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[6], &inputs[9], &inputs[10]));
+      }
+      vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry, &inputs[6 + has_bias], &inputs[7 + has_bias]));
     } else {
       CHECK(num_inputs >= 2U && num_inputs <= 3U)
           << "Fully connected (dense) layer requires 3 inputs with a bias, 2 inputs without.";
