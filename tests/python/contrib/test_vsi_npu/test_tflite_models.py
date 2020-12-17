@@ -75,17 +75,22 @@ def init_supported_models():
     where += "download.tensorflow.org/models/tflite_11_05_08"
     add_supported_model("mobilenet_v2_1.0_224", where, QUANT)
     add_supported_model("mobilenet_v2_1.0_224", where)
-    # add_supported_model("inception_v3", where, QUANT)
+    # the input size for inception_v3 model from tflite model zoo is 299
+    # https://discuss.tvm.apache.org/t/possible-bug-relay-internal-invariant-was-violdated/2105/8
+    m = add_supported_model("inception_v3", where, QUANT)
+    m.input_size = 299
 
     where = "https://storage.googleapis.com/download.tensorflow.org/models"
     add_supported_model("inception_v1_224", where, QUANT, suffix="_20181026")
     add_supported_model("inception_v2_224", where, QUANT, suffix="_20181026")
     add_supported_model("inception_v4_299", where, QUANT, suffix="_20181026")
 
-    # where = "https://storage.googleapis.com/download.tensorflow.org/"
-    # where += "models/tflite/model_zoo/upload_20180427"
-    # add_supported_model("inception_v3", where, suffix="_20180427")
-    # add_supported_model("inception_v4", where, suffix="_20180427")
+    where = "https://storage.googleapis.com/download.tensorflow.org/"
+    where += "models/tflite/model_zoo/upload_20180427"
+    m = add_supported_model("inception_v3", where, suffix="_20180427")
+    m.input_size = 299
+    m = add_supported_model("inception_v4", where, suffix="_20180427")
+    m.input_size = 299
 
     return SUPPORTED_MODELS
 
@@ -134,10 +139,7 @@ def get_img_data(shape, is_quant):
     image_path = download_testdata(image_url, "cat.png", module="data")
     resized_image = Image.open(image_path).resize(shape)
 
-    if is_quant:
-        DTYPE = "uint8"
-    else:
-        DTYPE = "float32"
+    DTYPE = "uint8" if is_quant else "float32"
 
     image_data = np.asarray(resized_image).astype(DTYPE)
 
@@ -158,9 +160,7 @@ def get_img_data(shape, is_quant):
 def compile_tflite_model(inputs, shape, model_name):
     m = SUPPORTED_MODELS[model_name]
 
-    DTYPE = "float32"
-    if m.is_quant:
-        DTYPE = "uint8"
+    DTYPE = "uint8" if m.is_quant else "float32"
 
     model = get_tflite_model(model_name)
 
@@ -209,9 +209,7 @@ def inference_remotely(lib_path, image_data):
 def get_ref_result(inputs, shape, model_name, image_data):
 
     m = SUPPORTED_MODELS[model_name]
-    DTYPE = "float32"
-    if m.is_quant:
-        DTYPE = "uint8"
+    DTYPE = "uint8" if m.is_quant else "float32"
 
     model = get_tflite_model(model_name)
     mod, params = relay.frontend.from_tflite(
@@ -245,6 +243,7 @@ init_supported_models()
 
 for m in args:
     if m not in SUPPORTED_MODELS.keys():
+        print("{} is not supported!".format(m))
         print("Supported models: {}".format(list(SUPPORTED_MODELS.keys())))
         sys.exit(1)
     else:
