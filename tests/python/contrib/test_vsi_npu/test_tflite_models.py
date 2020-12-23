@@ -275,7 +275,8 @@ for model_name, m in models_to_run.items():
         out_idx = np.argmax(np.squeeze(tvm_output))
     except Exception as err:
         print("\nExpect predict id {}, got {}".format(idx, err))
-        print("FAIL")
+        print(model_name, ": FAIL")
+        failed_list.append(model_name)
     else:
         print("\nExpect predict id {}, got {}".format(idx, out_idx))
         if (idx == out_idx):
@@ -285,5 +286,6 @@ for model_name, m in models_to_run.items():
             print(model_name, ": FAIL")
             failed_list.append(model_name)
 
-print("\n\nTest",len(models_to_run), "cases.", pass_cases, "Passed")
-print("Failed list is:", failed_list)
+print("\n\nTest", len(models_to_run), "cases: ", pass_cases, "Passed")
+if len(failed_list) > 0:
+    print("Failed list is:", failed_list)
