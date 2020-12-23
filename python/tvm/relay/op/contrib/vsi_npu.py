@@ -102,7 +102,7 @@ def vsi_npu_pattern_table():
         """
         pattern = is_op("nn.pad")(wildcard()) | wildcard()
         pattern = is_op("nn.conv2d")(pattern, is_constant())
-        pattern = pattern.optional(lambda x: is_op("nn.bias_add")(x, is_constant()))
+        pattern = pattern.optional(lambda x: (is_op("nn.bias_add")(x, is_constant()) | is_op("add")(x, is_constant())))
         return pattern
 
     def qnn_conv_pattern():

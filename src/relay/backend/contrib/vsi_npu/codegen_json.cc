@@ -272,15 +272,6 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
       json_node->SetAttr("padding", padding_attr);
     }
 
-    // Create depthwise info
-    bool is_depthwise = conv_attr->channels.defined() &&
-                         tvm::tir::ExprDeepEqual()(conv_attr->channels, conv_attr->groups) &&
-                         conv_attr->groups != 1;
-    std::vector<dmlc::any> depthwise_attr;
-    std::vector<std::string> depthwise = {std::to_string(is_depthwise)};
-    depthwise_attr.emplace_back(depthwise);
-    json_node->SetAttr("is_depthwise", depthwise_attr);
-
     return json_node;
   }
   /*!

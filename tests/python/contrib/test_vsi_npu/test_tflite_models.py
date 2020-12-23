@@ -14,7 +14,7 @@ from tvm.contrib import util
 from tvm.relay.op.contrib import vsi_npu
 from tvm.contrib.download import download_testdata
 
-RPC_HOST = "10.193.20.6"
+RPC_HOST = "10.193.20.32"
 RPC_PORT = 9090
 MEASURE_PERF = False
 SUPPORTED_MODELS = {}  # name to TFModel mapping
@@ -171,7 +171,7 @@ def compile_tflite_model(inputs, shape, model_name):
     lib_path = "./model.so"
 
     kwargs = {}
-    kwargs["cc"] = "/opt/cross_compile/bin/aarch64-none-linux-gnu-g++"
+    kwargs["cc"] = "aarch64-linux-gnu-gcc"
     target = "llvm  -mtriple=aarch64-linux-gnu"
     with transform.PassContext(opt_level=3, disabled_pass=["AlterOpLayout"]):
         mod = vsi_npu.partition_for_vsi_npu(mod, params)
@@ -252,6 +252,8 @@ for m in args:
 if len(models_to_run) == 0:
     models_to_run = SUPPORTED_MODELS
 
+pass_cases = 0
+failed_list = []
 for model_name, m in models_to_run.items():
     print("\nTesting {0: <50}".format(model_name.upper()))
 
@@ -277,6 +279,11 @@ for model_name, m in models_to_run.items():
     else:
         print("\nExpect predict id {}, got {}".format(idx, out_idx))
         if (idx == out_idx):
-            print("PASS")
+            print(model_name, ": PASS")
+            pass_cases += 1
         else:
-            print("FAIL")
+            print(model_name, ": FAIL")
+            failed_list.append(model_name)
+
+print("\n\nTest",len(models_to_run), "cases.", pass_cases, "Passed")
+print("Failed list is:", failed_list)

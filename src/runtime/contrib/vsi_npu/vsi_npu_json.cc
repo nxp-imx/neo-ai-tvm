@@ -534,9 +534,9 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::vector<std::string> pad = node.GetAttr<std::vector<std::string>>("padding");
     std::vector<std::string> strides = node.GetAttr<std::vector<std::string>>("strides");
     std::vector<std::string> dilation = node.GetAttr<std::vector<std::string>>("dilation");
-    auto is_depthwise = node.GetAttr<std::vector<std::string>>("is_depthwise")[0];
 
     int groups = std::stoi(node.GetAttr<std::vector<std::string>>("groups")[0]);
+    int channels = std::stoi(node.GetAttr<std::vector<std::string>>("channels")[0]);
 
     // Collect inputs and outputs, handling both nn.conv2d and qnn.conv2d cases.
     std::vector<JSONGraphNodeEntry> inputs = node.GetInputs();
@@ -545,22 +545,38 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     size_t num_inputs = inputs.size();
     JSONGraphNodeEntry out_entry(nid, 0);
     bool has_bias;
+    int32_t vsi_multiplier = 0;
+    std::vector<int64_t> data_shape = nodes_[inputs[0].id_].GetOpShape()[0];
+    std::vector<int64_t> weight_shape = nodes_[inputs[1].id_].GetOpShape()[0];
+    std::vector<int64_t> bias_shape = {channels};
+
+    if (groups == data_shape[1] && groups == weight_shape[0] && groups != 1) {
+      vsi_multiplier = static_cast<int32_t>(weight_shape[1]);
+      if (channels != vsi_multiplier) {
+          CHECK(channels == weight_shape[0] * weight_shape[1]) << "Invalid channels for depthwise conv2d.";
+	  weight_shape[0] = 1;
+	  weight_shape[1] = channels;
+      }
+    }
+
     if (node.GetOpName() == "qnn.conv2d") {
       CHECK(num_inputs >= 10U && num_inputs <= 11U)
           << "Quantized convolution requires 11 inputs with a bias, 9 inputs without.";
       has_bias = num_inputs == 11;
       vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0], &inputs[4], &inputs[2]));
-      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[1], &inputs[5], &inputs[3]));
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[1], &inputs[5], &inputs[3], &weight_shape));
       if (has_bias) {
-        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[6], &inputs[9], &inputs[10]));
+        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[6], &inputs[9], &inputs[10], &bias_shape));
       }
       vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry, &inputs[6 + has_bias], &inputs[7 + has_bias]));
     } else {
       CHECK(num_inputs >= 2U && num_inputs <= 3U)
           << "Convolution requires 3 inputs with a bias, 2 inputs without.";
       has_bias = num_inputs == 3;
-      for (const auto& i : inputs) {
-        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0]));
+      vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[1], nullptr, nullptr, &weight_shape));
+      if (has_bias) {
+        vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[2], nullptr, nullptr, &bias_shape));
       }
       vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
     }
@@ -589,12 +605,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       vsi_inputs.push_back(MakeDummyBiasTensor(vsi_inputs[0]->GetDataType(),
 			      {weight_tensor->GetShape()[3]}));
     }
-    int32_t vsi_multiplier = 0;
-    if (std::stoi(is_depthwise) == 1) {
-      vsi_multiplier = static_cast<int32_t>(weight_tensor->GetShape()[2]);
-    }
 
-    auto conv = graph_->CreateOperation<vsi::Conv2d>(static_cast<int32_t>(weight_tensor->GetShape()[3]),
+    auto conv = graph_->CreateOperation<vsi::Conv2d>(channels,
 		    vsi::PadType::AUTO, vsi_ksize, vsi_strides, vsi_dilation,
 		    vsi_pad, groups, vsi_multiplier);
     (*conv).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
@@ -629,7 +641,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
    */
   std::shared_ptr<vsi::Tensor> MakeVSITensorFromJSONEntry(const JSONGraphNodeEntry& tensor,
                                                  JSONGraphNodeEntry* scale = nullptr,
-                                                 JSONGraphNodeEntry* offset = nullptr) {
+                                                 JSONGraphNodeEntry* offset = nullptr,
+                                                 std::vector<int64_t> *in_shape = nullptr) {
     vsi::Quantization vsi_quant;
     if (scale != nullptr && offset != nullptr) {
       auto scale_tensor = data_entry_[EntryID(*scale)];
@@ -641,10 +654,11 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       vsi_quant = vsi::Quantization(vsi::QuantType::ASYMMETRIC, scale_data[0], offset_data[0]);
     }
 
-    return MakeVSITensorFromJSONEntry(tensor, vsi_quant);
+    return MakeVSITensorFromJSONEntry(tensor, vsi_quant, in_shape);
   }
   std::shared_ptr<vsi::Tensor> MakeVSITensorFromJSONEntry(const JSONGraphNodeEntry& tensor,
-                                                 const vsi::Quantization vsi_quant) {
+                                                 const vsi::Quantization vsi_quant,
+                                                 std::vector<int64_t> *in_shape = nullptr) {
     auto eid = EntryID(tensor);
 
     if (entry_out_tensor_.count(eid) != 0) {
@@ -667,7 +681,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       vsi_attr = vsi::TensorAttribute::TRANSIENT;
     }
 
-    auto vsi_tensor = MakeVSITensor(node, node_data, vsi_attr, vsi_quant);
+    auto vsi_tensor = MakeVSITensor(node, node_data, vsi_attr, vsi_quant, in_shape);
     entry_out_tensor_.insert({eid, vsi_tensor});
     return entry_out_tensor_[eid];
   }
@@ -686,14 +700,20 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
   std::shared_ptr<vsi::Tensor> MakeVSITensor(const JSONGraphNode& tensor_rep, void* data,
 				  vsi::TensorAttribute vsi_attr,
-				  const vsi::Quantization vsi_quant) {
+				  const vsi::Quantization vsi_quant,
+                                  std::vector<int64_t> *in_shape = nullptr) {
     //VSI parameter
     vsi::ShapeType vsi_shape;
     vsi::DataType vsi_dtype;
     //TVM parameter
-    std::vector<int64_t> tvm_shape = tensor_rep.GetOpShape()[0];
+    std::vector<int64_t> tvm_shape;
     DLDataType tvm_dtype = tensor_rep.GetOpDataType()[0];
 
+    if (in_shape != nullptr) {
+      tvm_shape = *in_shape;
+    } else {
+      tvm_shape = tensor_rep.GetOpShape()[0];
+    }
     for (unsigned int i = 0; i < tvm_shape.size(); i ++) {
       vsi_shape.push_back(tvm_shape[tvm_shape.size() - i - 1]);
     }
