@@ -17,6 +17,7 @@ from tvm.contrib.download import download_testdata
 RPC_HOST = "10.193.20.32"
 RPC_PORT = 9090
 MEASURE_PERF = False
+VERBOSE = False
 SUPPORTED_MODELS = {}  # name to TFModel mapping
 
 
@@ -175,7 +176,8 @@ def compile_tflite_model(inputs, shape, model_name):
     target = "llvm  -mtriple=aarch64-linux-gnu"
     with transform.PassContext(opt_level=3, disabled_pass=["AlterOpLayout"]):
         mod = vsi_npu.partition_for_vsi_npu(mod, params)
-        print(mod.astext(show_meta_data=False))
+        if VERBOSE:
+            print(mod.astext(show_meta_data=False))
         lib = relay.build(mod, target, params=params)
         lib.export_library(lib_path, fcompile=False, **kwargs)
 
@@ -237,7 +239,47 @@ def get_ref_result(inputs, shape, model_name, image_data):
     return ref_out
 
 
-args = sys.argv[1:]
+def print_help():
+    print("Usage: \n",
+          '  -r[--rpc]    IP:Port\n',
+          '  -m[--models] "model_list ...", all models by default\n',
+          '  [--perf] benchmark performance\n',
+          '  [--verbose] print more logs\n')
+
+
+def parse_command_args():
+    import getopt
+    import re
+
+    global RPC_HOST, RPC_PORT, MEASURE_PERF, VERBOSE
+    models_input = []
+    try:
+        opts, args = getopt.getopt(
+                         sys.argv[1:], "hr:m:v",
+                         ["help", "rpc=", "models=", "perf", "verbose"])
+    except getopt.GetoptError:
+        print_help()
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt in ("-h", "--help"):
+            print_help()
+            sys.exit()
+        elif opt in ("-r", "--rpc"):
+            rpc_ = arg.split(":")
+            if (len(rpc_) != 2):
+                raise Exception("invalid rcp address: %s" % arg)
+            RPC_HOST = rpc_[0].strip()
+            RPC_PORT = int(rpc_[1].strip())
+        elif opt in ("-m", "--models"):
+            models_input = ' '.join(re.split(' |,|;', arg.strip())).split()
+        elif opt in ("--perf"):
+            MEASURE_PERF = True
+        elif opt in ("-v", "--verbose"):
+            VERBOSE = True
+    return models_input
+
+
+args = parse_command_args()
 models_to_run = {}
 init_supported_models()
 
