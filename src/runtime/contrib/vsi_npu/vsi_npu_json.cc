@@ -41,6 +41,7 @@
 #include "ovxlibxx/operations/activations.h"
 #include "ovxlibxx/operations/softmax.h"
 #include "ovxlibxx/operations/reshape.h"
+#include "ovxlibxx/operations/resize.h"
 #include "ovxlibxx/operations/pool2d.h"
 #include "ovxlibxx/operations/conv2d.h"
 #include "ovxlibxx/operations/batchnorm.h"
@@ -144,6 +145,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Dropout(nid);
         } else if ("concatenate" == op_name || "qnn.concatenate" == op_name) {
           Concat(nid);
+        } else if ("image.resize" == op_name) {
+          Resize(nid);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -168,6 +171,52 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto reshape = graph_->CreateOperation<vsi::Reshape>(output_shape);
     (*reshape).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(reshape);
+  }
+
+  void Resize(const size_t& nid) {
+    auto node = nodes_[nid];
+    JSONGraphNodeEntry out_entry(nid, 0);
+    std::vector<JSONGraphNodeEntry> inputs = node.GetInputs();
+    std::vector<std::string> size = node.GetAttr<std::vector<std::string>>("size");
+    std::string method = node.GetAttr<std::vector<std::string>>("method")[0];
+    std::string mode = node.GetAttr<std::vector<std::string>>("coordinate_transformation_mode")[0];
+    std::string layout = node.GetAttr<std::vector<std::string>>("layout")[0];
+
+    std::vector<int32_t> vsi_size;
+    vsi::ResizeType vsi_type;
+    bool align_corners = 0;
+    bool half_pixel = 0;
+
+    vsi_size.push_back(std::stoi(size[0]));
+    vsi_size.push_back(std::stoi(size[1]));
+    if(method == "bilinear") {
+      vsi_type = vsi::ResizeType::BILINEAR;
+    } else if (method == "nearest_neighbor") {
+      vsi_type = vsi::ResizeType::NEAREST_NEIGHBOR;
+    } else {
+      LOG(FATAL) << "Unsupported method for Resize layer " << method;
+    }
+    if (mode == "half_pixel") {
+      half_pixel = 1;
+    } else if (mode == "align_corners") {
+      align_corners = 1;
+    }
+
+    CHECK(inputs.size() == 1U) << "Resize layer requires 1 inputs.";
+
+    auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
+
+    if(layout == "NHWC") {
+        vsi_input = PermuteVsiTensor(vsi_input, {1, 2, 0, 3}, true);
+        vsi_output = PermuteVsiTensor(vsi_output, {2, 0, 1, 3}, false);
+    } else {
+        CHECK(layout == "NCHW") << "Resize layer requires 1 inputs.";
+    }
+
+    auto resize = graph_->CreateOperation<vsi::Resize>(vsi_type, 0, vsi_size, align_corners, half_pixel);
+    (*resize).BindInput(vsi_input).BindOutput(vsi_output);
+    ops_.push_back(resize);
   }
 
   void Dense(const size_t& nid) {
@@ -738,6 +787,25 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     else
       tensor = graph_->CreateTensor(input_spec);
     return tensor;
+  }
+
+  std::shared_ptr<vsi::Tensor> PermuteVsiTensor(std::shared_ptr<vsi::Tensor> tensor,
+                                                std::vector<uint32_t> perm,
+                                                bool input) {
+    auto temp = graph_->CreateTensor(tensor->GetSpec().AsTransientSpec());
+
+    std::shared_ptr<vsi::Operation> op = graph_->CreateOperation<vsi::Permute>(perm);
+    if (input) {
+      (*op).BindInput(tensor);
+      (*op).BindOutput(temp);
+    } else {
+      (*op).BindInput(temp);
+      (*op).BindOutput(tensor);
+    }
+    ops_.push_back(op);
+    dummy_tensor_.push_back(temp);
+
+    return temp;
   }
 
   std::shared_ptr<vsi::Context> context_;

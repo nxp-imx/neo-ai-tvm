@@ -6,7 +6,7 @@ from tvm.relay.op.contrib import vsi_npu
 from tvm import rpc
 from tvm.contrib import util
 
-RPC_HOST = "10.193.20.6"
+RPC_HOST = "10.193.20.8"
 RPC_PORT = 9090
 CROSS_CC = "aarch64-linux-gnu-gcc"
 

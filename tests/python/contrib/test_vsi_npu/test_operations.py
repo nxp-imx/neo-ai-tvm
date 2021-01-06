@@ -206,6 +206,42 @@ def test_concatenate():
     mod, params = get_workload(data_shape, dtype)
     verify_vsi_result(mod, params, data_shape, out_shape, dtype)
 
+def test_image_resize():
+    data_dtype = 'float32'
+    in_size = (33, 33)
+    out_size = (257, 257)
+    channel = (21,)
+
+    def run_test(layout, method, mode):
+        if (layout == "NHWC"):
+            data_shape = (1,) + in_size + channel
+            out_shape = (1,) + out_size + channel
+        else:
+            data_shape = (1,) + channel + in_size
+            out_shape = (1,) + channel + out_size
+        x = relay.var("data", shape=data_shape, dtype=data_dtype)
+        out = relay.image.resize(x, out_size, layout, method, mode)
+        args = relay.analysis.free_vars(out)
+        net = relay.Function(args, out)
+
+        mod, params = relay.testing.init.create_workload(net)
+        verify_vsi_result(mod, params, data_shape, out_shape, data_dtype)
+    print("Testing {0: <50}".format("RESIZE_1"), end="")
+    run_test("NHWC", "nearest_neighbor", "asymmetric")
+    print("Testing {0: <50}".format("RESIZE_2"), end="")
+    run_test("NHWC", "bilinear", "asymmetric")
+    print("Testing {0: <50}".format("RESIZE_3"), end="")
+    run_test("NHWC", "bilinear", "half_pixel")
+    print("Testing {0: <50}".format("RESIZE_4"), end="")
+    run_test("NHWC", "bilinear", "align_corners")
+    print("Testing {0: <50}".format("RESIZE_5"), end="")
+    run_test("NCHW", "nearest_neighbor", "asymmetric")
+    print("Testing {0: <50}".format("RESIZE_6"), end="")
+    run_test("NCHW", "bilinear", "asymmetric")
+    print("Testing {0: <50}".format("RESIZE_7"), end="")
+    run_test("NCHW", "bilinear", "half_pixel")
+    print("Testing {0: <50}".format("RESIZE_8"), end="")
+    run_test("NCHW", "bilinear", "align_corners")
 
 def test_dropout():
     func = relay.nn.dropout
@@ -255,4 +291,5 @@ if __name__ == "__main__":
     test_dense()
     test_dropout()
     test_concatenate()
+    test_image_resize()
 
