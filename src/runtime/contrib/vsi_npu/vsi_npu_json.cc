@@ -320,7 +320,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     JSONGraphNodeEntry out_entry(nid, 0);
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
-    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
 
     auto clip = graph_->CreateOperation<vsi::Clip>(std::stof(min), std::stof(max));
     (*clip).BindInput(vsi_input).BindOutput(vsi_output);

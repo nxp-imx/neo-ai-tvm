@@ -1,52 +1,21 @@
 import os
 import sys
 from PIL import Image
-from matplotlib import pyplot as plt
 import numpy as np
 
-import tvm
-from tvm import relay, transform
-from tvm import rpc
-from tvm.contrib import graph_runtime
-from tvm import te
-from tvm.contrib import graph_runtime as runtime
-from tvm.contrib import util
-from tvm.relay.op.contrib import vsi_npu
-from tvm.contrib.download import download_testdata
+from tflite_models import *
 
-RPC_HOST = "10.193.20.32"
-RPC_PORT = 9090
-MEASURE_PERF = False
+MEASURE_PERF = True
 VERBOSE = False
 SUPPORTED_MODELS = {}  # name to TFModel mapping
 
 
-class TFModel:
-    def __init__(self, name, where, is_quant):
-
-        # expect the name looks like "mobilenet_v1_0.25_128"
-        fields = name.split("_")
-
-        try:
-            size = int(fields[-1])
-        except Exception:
-            size = 224
-
-        if is_quant:
-            name = "{}_quant".format(name)
-
-        self.name = name
-        self.tgz = "{}/{}.tgz".format(where, name)
-        self.is_quant = is_quant
-        self.input_size = size
-
-
-def add_supported_model(name, where, is_quant=False, suffix=None):
-    m = TFModel(name, where, is_quant)
+def add_supported_model(name, where, is_quant=False, suffix=''):
+    m = TFModel(name, where, is_quant, formats='tgz')
     SUPPORTED_MODELS[m.name] = m
 
     if suffix is not None:
-        m.tgz = "{}/{}{}.tgz".format(where, m.name, suffix)
+        m.url = "{}/{}{}.tgz".format(where, m.name, suffix)
 
     return m
 
@@ -88,54 +57,15 @@ def init_supported_models():
 
     where = "https://storage.googleapis.com/download.tensorflow.org/"
     where += "models/tflite/model_zoo/upload_20180427"
-    m = add_supported_model("inception_v3", where, suffix="_20180427")
+    m = add_supported_model("inception_v3", where, suffix="_2018_04_27")
     m.input_size = 299
-    m = add_supported_model("inception_v4", where, suffix="_20180427")
+    m = add_supported_model("inception_v4", where, suffix="_2018_04_27")
     m.input_size = 299
 
     return SUPPORTED_MODELS
 
 
-def extract(path):
-    import tarfile
-
-    if path.endswith("tgz") or path.endswith("gz"):
-        dir_path = os.path.dirname(path)
-        tar = tarfile.open(path)
-        tar.extractall(path=dir_path)
-        tar.close()
-    else:
-        raise RuntimeError("Could not decompress the file: " + path)
-
-
-def get_tflite_model(model_name):
-
-    # Download model tar file and extract it to get tflite
-    model_path = download_testdata(SUPPORTED_MODELS[model_name].tgz,
-                                   model_name + ".tgz",
-                                   module=["tf", "official"])
-
-    model_dir = os.path.dirname(model_path)
-    extract(model_path)
-
-    # Now we can open tflite model
-    tflite_model_file = os.path.join(model_dir, model_name + ".tflite")
-    tflite_model_buf = open(tflite_model_file, "rb").read()
-
-    # Get TFLite model from buffer
-    try:
-        import tflite
-        model = tflite.Model.GetRootAsModel(tflite_model_buf, 0)
-    except AttributeError:
-        import tflite.Model
-        model = tflite.Model.Model.GetRootAsModel(tflite_model_buf, 0)
-
-    return model
-
-
-def get_img_data(shape, is_quant):
-    image_url =\
-        "https://github.com/dmlc/mxnet.js/blob/main/data/cat.png?raw=true"
+def get_img_data(image_url, shape, is_quant):
 
     image_path = download_testdata(image_url, "cat.png", module="data")
     resized_image = Image.open(image_path).resize(shape)
@@ -156,87 +86,6 @@ def get_img_data(shape, is_quant):
         image_data[:, :, :, 2] = 2.0 / 255.0 * image_data[:, :, :, 2] - 1
 
     return image_data
-
-
-def compile_tflite_model(inputs, shape, model_name):
-    m = SUPPORTED_MODELS[model_name]
-
-    DTYPE = "uint8" if m.is_quant else "float32"
-
-    model = get_tflite_model(model_name)
-
-    # Parse TFLite model and convert it to a Relay module
-    mod, params = relay.frontend.from_tflite(
-        model, shape_dict={inputs: shape}, dtype_dict={inputs: DTYPE}
-    )
-    lib_path = "./model.so"
-
-    kwargs = {}
-    kwargs["cc"] = "aarch64-linux-gnu-gcc"
-    target = "llvm  -mtriple=aarch64-linux-gnu"
-    with transform.PassContext(opt_level=3, disabled_pass=["AlterOpLayout"]):
-        mod = vsi_npu.partition_for_vsi_npu(mod, params)
-        if VERBOSE:
-            print(mod.astext(show_meta_data=False))
-        lib = relay.build(mod, target, params=params)
-        lib.export_library(lib_path, fcompile=False, **kwargs)
-
-    return lib_path
-
-
-def inference_remotely(lib_path, image_data):
-    remote = rpc.connect(RPC_HOST, RPC_PORT)
-    remote.upload(lib_path)
-    lib = remote.load_module(os.path.basename(lib_path))
-    ctx = remote.cpu()
-
-    # Create a runtime executor module
-    module = graph_runtime.GraphModule(lib["default"](ctx))
-    # Feed input data
-    module.set_input(inputs, tvm.nd.array(image_data))
-
-    if MEASURE_PERF:
-        print("Evaluate graph runtime inference cost on VSI NPU")
-        ftimer = module.module.time_evaluator("run", ctx, number=1, repeat=50)
-        # Measure in millisecond.
-        prof_res = np.array(ftimer().results) * 1000
-        print("VSI NPU runtime inference time (std dev): %.2f ms (%.2f ms)"
-              % (np.mean(prof_res), np.std(prof_res)))
-    module.run()
-    tvm_output = module.get_output(0).asnumpy()
-
-    return tvm_output
-
-
-def get_ref_result(inputs, shape, model_name, image_data):
-
-    m = SUPPORTED_MODELS[model_name]
-    DTYPE = "uint8" if m.is_quant else "float32"
-
-    model = get_tflite_model(model_name)
-    mod, params = relay.frontend.from_tflite(
-        model, shape_dict={inputs: shape}, dtype_dict={inputs: DTYPE}
-    )
-    target = "llvm"
-    with tvm.transform.PassContext(opt_level=3,
-                                   disabled_pass=["AlterOpLayout"]):
-        lib = relay.build(mod, target, params=params)
-
-    ctx = tvm.cpu()
-    cpu_mod = graph_runtime.GraphModule(lib["default"](ctx))
-    cpu_mod.set_input(inputs, tvm.nd.array(image_data))
-
-    if MEASURE_PERF:
-        print("Evaluate graph runtime inference cost on CPU")
-        ftimer = cpu_mod.module.time_evaluator("run", ctx, number=1, repeat=1)
-        # Measure in millisecond.
-        prof_res = np.array(ftimer().results) * 1000
-        print("CPU runtime inference time (std dev): %.2f ms (%.2f ms)"
-              % (np.mean(prof_res), np.std(prof_res)))
-
-    cpu_mod.run()
-    ref_out = cpu_mod.get_output(0).asnumpy()
-    return ref_out
 
 
 def print_help():
@@ -282,6 +131,7 @@ def parse_command_args():
 args = parse_command_args()
 models_to_run = {}
 init_supported_models()
+image_url = "https://github.com/dmlc/mxnet.js/blob/main/data/cat.png?raw=true"
 
 for m in args:
     if m not in SUPPORTED_MODELS.keys():
@@ -299,21 +149,25 @@ failed_list = []
 for model_name, m in models_to_run.items():
     print("\nTesting {0: <50}".format(model_name.upper()))
 
-    inputs = "input"
     is_quant = m.is_quant
     input_size = m.input_size
 
     shape = (1, input_size, input_size, 3)
 
-    image_data = get_img_data(shape[1:3], is_quant)
-    ref_output = get_ref_result(inputs, shape, model_name, image_data)
+    image_data = get_img_data(image_url, shape[1:3], is_quant)
+    ref_output, prof_res = get_ref_result(shape, m, image_data, MEASURE_PERF)
+    if MEASURE_PERF:
+        print("CPU runtime inference time (std dev): %.2f ms (%.2f ms)"
+              % (np.mean(prof_res), np.std(prof_res)))
 
     # Get top 1 prediction
     idx = np.argmax(np.squeeze(ref_output))
 
     try:
-        lib_path = compile_tflite_model(inputs, shape, model_name)
-        tvm_output = inference_remotely(lib_path, image_data)
+        tvm_output, prof_res = inference_remotely(m, shape, image_data, MEASURE_PERF)
+        if MEASURE_PERF:
+            print("VSI NPU runtime inference time (std dev): %.2f ms (%.2f ms)"
+                  % (np.mean(prof_res), np.std(prof_res)))
         out_idx = np.argmax(np.squeeze(tvm_output))
     except Exception as err:
         print("\nExpect predict id {}, got {}".format(idx, err))
