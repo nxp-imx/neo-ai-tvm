@@ -520,9 +520,9 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto ratio_tvm = node.GetAttr<std::vector<std::string>>("rate")[0];
     //auto shape_tvm = nodes_[inputs[0].id_].GetOpShape()[inputs[0].index_];
 
-    uint32_t ratio_vsi = 1;
+    float ratio_vsi = 1.0;
     //ratio_vsi = ConvertAxis(std::stoi(ratio_tvm), shape_tvm.size());
-    ratio_vsi = std::stoi(ratio_tvm);
+    //ratio_vsi = std::stof(ratio_tvm);
 
     std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_inputs;
     std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
