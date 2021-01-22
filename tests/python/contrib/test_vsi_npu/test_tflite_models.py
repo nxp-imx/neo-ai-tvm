@@ -185,7 +185,6 @@ def compile_tflite_model(shape, model_name):
     DTYPE = "uint8" if m.is_quant else "float32"
 
     model = get_tflite_model(model_name)
-
     # Parse TFLite model and convert it to a Relay module
     mod, params = relay.frontend.from_tflite(
         model, shape_dict={m.inputs: shape}, dtype_dict={m.inputs: DTYPE}
@@ -205,7 +204,7 @@ def compile_tflite_model(shape, model_name):
     return lib_path
 
 
-def inference_remotely(lib_path, image_data):
+def inference_remotely(tfmodel, lib_path, image_data):
     remote = rpc.connect(RPC_HOST, RPC_PORT)
     remote.upload(lib_path)
     lib = remote.load_module(os.path.basename(lib_path))
@@ -214,7 +213,7 @@ def inference_remotely(lib_path, image_data):
     # Create a runtime executor module
     module = graph_runtime.GraphModule(lib["default"](ctx))
     # Feed input data
-    module.set_input(inputs, tvm.nd.array(image_data))
+    module.set_input(tfmodel.inputs, tvm.nd.array(image_data))
 
     if MEASURE_PERF:
         print("Evaluate graph runtime inference cost on VSI NPU")
@@ -265,7 +264,7 @@ def verify_tvm_result(ref_output, shape, model_name, image_data):
 
     m = SUPPORTED_MODELS[model_name]
     lib_path = compile_tflite_model(shape, model_name)
-    tvm_output = inference_remotely(lib_path, image_data)
+    tvm_output = inference_remotely(m, lib_path, image_data)
 
     if m.name.startswith('deeplabv3') and m.is_quant:
         ref_output = ref_output.reshape(shape[1:3])
@@ -288,7 +287,8 @@ def verify_tvm_result(ref_output, shape, model_name, image_data):
         ref_idx = np.argmax(np.squeeze(ref_output))
         out_idx = np.argmax(np.squeeze(tvm_output))
 
-        assert ref_idx == out_idx, f'Expect {ref_idx}, got {out_idx}'
+        print(f'Expect predict id: {ref_idx}, got {out_idx}')
+        assert ref_idx == out_idx
 
 
 def print_help():
@@ -353,12 +353,11 @@ for m in args:
 if len(models_to_run) == 0:
     models_to_run = SUPPORTED_MODELS
 
-print(f"Testing {len(models_to_run)} model(s): {list(models_to_run.keys())}")
+print(f"\nTesting {len(models_to_run)} model(s): {list(models_to_run.keys())}")
 
 pass_cases = 0
 failed_list = []
 for model_name, m in models_to_run.items():
-    print(m.url)
     print("\nTesting {0: <50}".format(model_name.upper()))
 
     is_quant = m.is_quant
@@ -372,6 +371,7 @@ for model_name, m in models_to_run.items():
     try:
         verify_tvm_result(ref_output, shape, model_name, image_data)
     except Exception as err:
+        print("Exception", err)
         print(model_name, ": FAIL")
         failed_list.append(model_name)
     else:
