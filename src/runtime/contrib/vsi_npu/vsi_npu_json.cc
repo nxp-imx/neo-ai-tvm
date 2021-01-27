@@ -50,6 +50,8 @@
 #include "tim/vx/ops/clip.h"
 #include "tim/vx/ops/concat.h"
 #include "tim/vx/ops/dropout.h"
+#include "tim/vx/ops/split.h"
+#include "tim/vx/ops/stridedslice.h"
 
 #include "vsi_utils.h"
 #endif
@@ -123,8 +125,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 	  Reshape(nid);
         } else if ("nn.dense" == op_name or "qnn.dense" == op_name) {
 	  Dense(nid);
-        } else if ("nn.relu" == op_name) {
-          Relu(nid);
+        } else if ("nn.relu" == op_name or "sigmoid" == op_name) {
+          Activation(nid);
         } else if ("nn.softmax" == op_name || "qnn.softmax" == op_name) {
           Softmax(nid);
         } else if ("nn.batch_norm" == op_name) {
@@ -135,11 +137,12 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           GlobalPool2d(nid);
         } else if ("nn.max_pool2d" == op_name || "nn.avg_pool2d" == op_name || "qnn.avg_pool2d" == op_name) {
           Pool2d(nid);
-        } else if ("add" == op_name || "qnn.add" == op_name) {
-          Add(nid);
+        } else if ("add" == op_name || "qnn.add" == op_name or "multiply" == op_name
+                   or "divide" == op_name) {
+          Elementwise(nid);
         } else if ("clip" == op_name) {
           Clip(nid);
-        } else if ("layout_transform" == op_name) {
+        } else if ("layout_transform" == op_name or "transpose" == op_name) {
           Permute(nid);
         } else if ("nn.dropout" == op_name) {
           Dropout(nid);
@@ -147,6 +150,10 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Concat(nid);
         } else if ("image.resize" == op_name) {
           Resize(nid);
+        } else if ("split" == op_name) {
+          Split(nid);
+        } else if ("strided_slice" == op_name) {
+          StridedSlice(nid);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -257,9 +264,9 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     ops_.push_back(fc);
   }
 
-  void Relu(const size_t& nid) {
-
+  void Activation(const size_t& nid) {
     auto node = nodes_[nid];
+    auto op_name = node.GetOpName();
     //JSONGraphNodeEntry input
     auto data_entry = node.GetInputs()[0];
 
@@ -272,26 +279,29 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     vsi_output = MakeVSITensorFromJSONEntry(out_entry);
 
-    auto _op = graph_->CreateOperation<tim::vx::ops::Relu>();
+    std::shared_ptr<tim::vx::Operation> _op;
+    if ("nn.relu" == op_name) {
+      _op = graph_->CreateOperation<tim::vx::ops::Relu>();
+    } else if ("sigmoid" == op_name){
+      _op = graph_->CreateOperation<tim::vx::ops::Sigmoid>();
+    }
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(_op);
   }
 
-  void Add(const size_t& nid) {
+  void Elementwise(const size_t& nid) {
     auto node = nodes_[nid];
-
+    auto op_name = node.GetOpName();
     auto inputs = node.GetInputs();
 
     CHECK(inputs.size() >= 2U) << "BatchNormal layer requires at least 2 inputs.";
 
     JSONGraphNodeEntry out_entry(nid, 0);
-
     std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_inputs;
     std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
 
-    auto input_cnt = inputs.size();
-
-    if (node.GetOpName() == "qnn.add") {
+    if (op_name == "qnn.add") {
+      auto input_cnt = inputs.size();
       input_cnt = (input_cnt - 2) / 3; //Each input has 3 tensor(data, scale, offset)
       for (size_t j = 0; j < input_cnt; j ++) {
         vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[j],
@@ -306,9 +316,16 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
     }
 
-    auto add = graph_->CreateOperation<tim::vx::ops::Add>();
-    (*add).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
-    ops_.push_back(add);
+    std::shared_ptr<tim::vx::Operation> _op;
+    if ("add" == op_name || "qnn.add" == op_name) {
+        _op = graph_->CreateOperation<tim::vx::ops::Add>();
+    } else if ("multiply" == op_name) {
+        _op = graph_->CreateOperation<tim::vx::ops::Multiply>();
+    } else if ("divide" == op_name) {
+        _op = graph_->CreateOperation<tim::vx::ops::Div>();
+    }
+    (*_op).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
+    ops_.push_back(_op);
   }
 
   void Clip(const size_t& nid) {
@@ -328,19 +345,81 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     ops_.push_back(clip);
   }
 
-  void Permute(const size_t& nid) {
+  void Split(const size_t& nid) {
     auto node = nodes_[nid];
     auto inputs = node.GetInputs();
-    std::string src_layout = node.GetAttr<std::vector<std::string>>("src_layout")[0];
-    std::string dst_layout = node.GetAttr<std::vector<std::string>>("dst_layout")[0];
+    auto outputs_num = node.GetNumOutput();
+    auto tvm_axis = std::stoi(node.GetAttr<std::vector<std::string>>("axis")[0]);
+    auto slices_num = std::stoi(node.GetAttr<std::vector<std::string>>("indices_or_sections")[0]);
+    auto shape_tvm = nodes_[inputs[0].id_].GetOpShape()[inputs[0].index_];
+    auto vx_axis = ConvertAxis(tvm_axis, shape_tvm.size());
+
+    CHECK((uint32_t)slices_num == outputs_num) << "Split layer slices number doesn't match outputs number.";
+
+    auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
+    std::vector<uint32_t> slices;
+    for (int i = 0; i < slices_num; i++){
+      JSONGraphNodeEntry out_entry(nid, i);
+      auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
+      vsi_outputs.push_back(vsi_output);
+      slices.push_back(vsi_output->GetShape()[vx_axis]);
+    }
+    auto split = graph_->CreateOperation<tim::vx::ops::Split>(vx_axis, slices);
+    (*split).BindInput(vsi_input).BindOutputs(vsi_outputs);
+    ops_.push_back(split);
+  }
+
+  void StridedSlice(const size_t& nid) {
+    auto node = nodes_[nid];
+    auto inputs = node.GetInputs();
+    auto begin = node.GetAttr<std::vector<std::string>>("begin");
+    auto end = node.GetAttr<std::vector<std::string>>("end");
+    auto strides = node.GetAttr<std::vector<std::string>>("strides");
+
+    std::vector<int32_t> vx_begin;
+    for (unsigned int i = 0; i < begin.size(); i ++) {
+      vx_begin.push_back(std::stoi(begin[begin.size() - i - 1]));
+    }
+    std::vector<int32_t> vx_end;
+    for (unsigned int i = 0; i < end.size(); i ++) {
+      vx_end.push_back(std::stoi(end[end.size() - i - 1]));
+    }
+    std::vector<int32_t> vx_stride;
+    for (unsigned int i = 0; i < strides.size(); i ++) {
+      vx_stride.push_back(std::stoi(strides[strides.size() - i - 1]));
+    }
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+    auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+    auto vsi_output =  MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
+
+    auto slice = graph_->CreateOperation<tim::vx::ops::StridedSlice>(vx_begin, vx_end, vx_stride, 0, 0, 0);
+    (*slice).BindInput(vsi_input).BindOutput(vsi_output);
+    ops_.push_back(slice);
+  }
+
+  void Permute(const size_t& nid) {
+    auto node = nodes_[nid];
+    auto op_name = node.GetOpName();
+    auto inputs = node.GetInputs();
     std::vector<uint32_t> perm;
 
-    if (src_layout == "NHWC" && dst_layout == "NCHW"){
+    if ("layout_transform" == op_name) {
+      std::string src_layout = node.GetAttr<std::vector<std::string>>("src_layout")[0];
+      std::string dst_layout = node.GetAttr<std::vector<std::string>>("dst_layout")[0];
+      if (src_layout == "NHWC" && dst_layout == "NCHW"){
         perm = {1, 2, 0, 3};
-    } else if (src_layout == "NCHW" && dst_layout == "NHWC") {
+      } else if (src_layout == "NCHW" && dst_layout == "NHWC") {
         perm = {2, 0, 1, 3};
-    } else {
+      } else {
         LOG(FATAL) << "Unsupported layout transform from " << src_layout << " to " << dst_layout;
+      }
+    } else if ("transpose" == op_name){
+      auto tvm_perm = node.GetAttr<std::vector<std::string>>("axes");
+      for (unsigned int i = 0; i < tvm_perm.size(); i ++) {
+        perm.push_back(std::stoi(tvm_perm[tvm_perm.size() - i - 1]));
+      }
     }
 
     JSONGraphNodeEntry out_entry(nid, 0);
@@ -763,8 +842,12 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     } else {
       tvm_shape = tensor_rep.GetOpShape()[0];
     }
-    for (unsigned int i = 0; i < tvm_shape.size(); i ++) {
-      vsi_shape.push_back(tvm_shape[tvm_shape.size() - i - 1]);
+    if (tvm_shape.size() == 0) {
+      vsi_shape.push_back(1);
+    } else {
+      for (unsigned int i = 0; i < tvm_shape.size(); i ++) {
+        vsi_shape.push_back(tvm_shape[tvm_shape.size() - i - 1]);
+      }
     }
 
     if (tvm_dtype.code == DLDataTypeCode::kDLFloat && tvm_dtype.bits == 32) {
