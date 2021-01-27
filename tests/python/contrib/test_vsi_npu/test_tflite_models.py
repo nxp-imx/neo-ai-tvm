@@ -16,7 +16,7 @@ from tvm.contrib.download import download_testdata
 
 from tflite_deeplab import *
 
-RPC_HOST = "10.193.20.32"
+RPC_HOST = "10.193.20.8"
 RPC_PORT = 9090
 MEASURE_PERF = False
 VERBOSE = False
@@ -24,7 +24,7 @@ SUPPORTED_MODELS = {}  # name to TFModel mapping
 
 
 class TFModel:
-    def __init__(self, name, where, is_quant, formats='tgz'):
+    def __init__(self, name, where, is_quant, formats='tgz', suffix=''):
 
         # expect the name looks like "mobilenet_v1_0.25_128"
         fields = name.split("_")
@@ -39,7 +39,7 @@ class TFModel:
 
         self.name = name
         self.formats = formats
-        self.url = "{}/{}.{}".format(where, name, formats)
+        self.url = "{}/{}{}.{}".format(where, name, suffix, formats)
 
         self.is_quant = is_quant
         self.input_size = size
@@ -47,12 +47,9 @@ class TFModel:
 
 
 def add_supported_model(name, where, is_quant=False, formats='tgz',
-                        suffix=None):
-    m = TFModel(name, where, is_quant, formats)
+                        suffix=''):
+    m = TFModel(name, where, is_quant, formats, suffix)
     SUPPORTED_MODELS[m.name] = m
-
-    if m.formats == 'tgz' and suffix is not None:
-        m.url = "{}/{}{}.tgz".format(where, m.name, suffix)
 
     return m
 
@@ -111,20 +108,39 @@ def init_supported_models():
     m.input_size = 513
     m.inputs = "MobilenetV2/MobilenetV2/input"
 
+    where = "http://download.tensorflow.org/models/object_detection"
+    m = add_supported_model("ssdlite_mobiledet_cpu_320x320_coco", where,
+                            formats='tar.gz', suffix="_2020_05_19")
+    m.input_size = 320
+    m.inputs = 'normalized_input_image_tensor'
+
     return SUPPORTED_MODELS
 
 
-def extract(path):
+def extract(path, model_name):
     import tarfile
+    import zipfile
 
-    if path.endswith("tgz") or path.endswith("gz"):
-        dir_path = os.path.dirname(path)
+    dir_path = os.path.dirname(path)
+    tmp_dir = os.path.join(dir_path, model_name)
+    os.makedirs(tmp_dir, exist_ok=True)
+    if path.endswith("tgz") or path.endswith("gz") or path.endswith("tar.gz"):
         tar = tarfile.open(path)
-        tar.extractall(path=dir_path)
+        tar.extractall(path=tmp_dir)
         tar.close()
+    elif path.endswith("zip"):
+        zf = zipfile.ZipFile(path, 'r')
+        for f in zf.namelist():
+            zf.extract(f, tmp_dir)
     else:
         raise RuntimeError("Could not decompress the file: " + path)
 
+    for dir_path, subpaths, files in os.walk(tmp_dir):
+        for f in files:
+            if f.endswith("tflite"):
+                return os.path.join(dir_path, f)
+
+    raise RuntimeError("Could not find tflite model file.")
 
 def get_tflite_model(model_name):
 
@@ -136,11 +152,12 @@ def get_tflite_model(model_name):
                                    module=["tf", "official"])
 
     model_dir = os.path.dirname(model_path)
-    if m.formats == 'tgz':
-        extract(model_path)
-
+    if m.formats in ['tgz', 'zip', 'tar.gz']:
+        model_name = extract(model_path, model_name)
+    else:
+        model_name = model_name + ".tflite"
     # Now we can open tflite model
-    tflite_model_file = os.path.join(model_dir, model_name + ".tflite")
+    tflite_model_file = os.path.join(model_dir, model_name)
     tflite_model_buf = open(tflite_model_file, "rb").read()
 
     # Get TFLite model from buffer
@@ -279,7 +296,7 @@ def verify_tvm_result(ref_output, shape, model_name, image_data):
         freq_weighted_IU = frequency_weighted_IU(ref_output, tvm_output)
         print("frequency weighted IU:", freq_weighted_IU)
 
-    elif m.name.startswith('deeplabv3'):
+    elif 'deeplabv3' in m.name or "ssdlite_mobiledet" in m.name:
         # compare deeplabv3 float32 output
         np.testing.assert_allclose(ref_output, tvm_output,
                                    rtol=1e-4, atol=1e-4, verbose=True)
