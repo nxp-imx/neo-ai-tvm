@@ -307,7 +307,7 @@ def verify_tvm_result(ref_output, shape, model_name, image_data):
         freq_weighted_IU = frequency_weighted_IU(ref_output, tvm_output)
         print("frequency weighted IU:", freq_weighted_IU)
 
-    elif 'deeplabv3' in m.name or "ssdlite_mobiledet" in m.name or "mobilenet_ssd" in m.name:
+    elif 'deeplabv3' in m.name or "ssd" in m.name:
         # compare deeplabv3 float32 output
         np.testing.assert_allclose(ref_output, tvm_output,
                                    rtol=1e-4, atol=1e-4, verbose=True)
