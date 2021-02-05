@@ -56,6 +56,11 @@ def add_supported_model(name, where, is_quant=False, formats='tgz',
 
 def init_supported_models():
     QUANT = True
+    where = "http://10.192.208.75/images/deepview/models/float/mobilenet_ssd_v1"
+    m = add_supported_model("mobilenet_ssd_v1_trimmed_converted", where, formats='tflite')
+    m.input_size = 300
+    m.inputs = 'Preprocessor/sub'
+
     where = "http://download.tensorflow.org/models/mobilenet_v1_2018_08_02"
     add_supported_model("mobilenet_v1_0.25_128", where, QUANT)
     add_supported_model("mobilenet_v1_0.25_224", where, QUANT)
@@ -296,7 +301,7 @@ def verify_tvm_result(ref_output, shape, model_name, image_data):
         freq_weighted_IU = frequency_weighted_IU(ref_output, tvm_output)
         print("frequency weighted IU:", freq_weighted_IU)
 
-    elif 'deeplabv3' in m.name or "ssdlite_mobiledet" in m.name:
+    elif 'deeplabv3' in m.name or "ssdlite_mobiledet" in m.name or "mobilenet_ssd" in m.name:
         # compare deeplabv3 float32 output
         np.testing.assert_allclose(ref_output, tvm_output,
                                    rtol=1e-4, atol=1e-4, verbose=True)
