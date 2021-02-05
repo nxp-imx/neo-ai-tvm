@@ -52,6 +52,7 @@
 #include "tim/vx/ops/dropout.h"
 #include "tim/vx/ops/split.h"
 #include "tim/vx/ops/stridedslice.h"
+#include "tim/vx/ops/reduce.h"
 
 #include "vsi_utils.h"
 #endif
@@ -154,6 +155,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           Split(nid);
         } else if ("strided_slice" == op_name) {
           StridedSlice(nid);
+        } else if ("mean" == op_name) {
+          Reduce(nid);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -397,6 +400,35 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto slice = graph_->CreateOperation<tim::vx::ops::StridedSlice>(vx_begin, vx_end, vx_stride, 0, 0, 0);
     (*slice).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(slice);
+  }
+
+  void Reduce(const size_t& nid) {
+    auto node = nodes_[nid];
+    auto inputs = node.GetInputs();
+    auto axis = node.GetAttr<std::vector<std::string>>("axis");
+    auto keepdims = node.GetAttr<std::vector<std::string>>("keepdims")[0];
+    auto shape_tvm = nodes_[inputs[0].id_].GetOpShape()[inputs[0].index_];
+
+    std::vector<int32_t> vx_axis;
+    for (unsigned int i = 0; i < axis.size(); i ++) {
+      auto tmp = ConvertAxis(std::stoi(axis[axis.size() - i - 1]), shape_tvm.size());
+      vx_axis.push_back(tmp);
+    }
+
+    bool vx_keepdims;
+    if (keepdims == "True") {
+      vx_keepdims = true;
+    } else {
+      vx_keepdims = false;
+    }
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+    auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+    auto vsi_output =  MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
+
+    auto op = graph_->CreateOperation<tim::vx::ops::ReduceMean>(vx_axis, vx_keepdims);
+    (*op).BindInput(vsi_input).BindOutput(vsi_output);
+    ops_.push_back(op);
   }
 
   void Permute(const size_t& nid) {

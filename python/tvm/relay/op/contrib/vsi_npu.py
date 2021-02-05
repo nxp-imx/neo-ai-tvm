@@ -83,6 +83,7 @@ _register_external_op_helper("sigmoid")
 _register_external_op_helper("transpose")
 _register_external_op_helper("split")
 _register_external_op_helper("strided_slice")
+_register_external_op_helper("mean")
 
 
 @tvm.ir.register_op_attr("layout_transform", "target.vsi_npu")

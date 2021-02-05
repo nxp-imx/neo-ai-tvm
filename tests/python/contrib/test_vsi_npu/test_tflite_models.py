@@ -56,6 +56,12 @@ def add_supported_model(name, where, is_quant=False, formats='tgz',
 
 def init_supported_models():
     QUANT = True
+    where = "http://download.tensorflow.org/models/object_detection"
+    m = add_supported_model("ssd_mobilenet_v3", where, formats='tar.gz', suffix="_small_coco_2020_01_14")
+    m.input_size = 320
+    m.is_quant = True
+    m.inputs = 'normalized_input_image_tensor'
+
     where = "http://10.192.208.75/images/deepview/models/float/mobilenet_ssd_v1"
     m = add_supported_model("mobilenet_ssd_v1_trimmed_converted", where, formats='tflite')
     m.input_size = 300
