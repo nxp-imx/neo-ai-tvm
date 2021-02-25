@@ -17,11 +17,6 @@
  * under the License.
  */
 
-/*!
- * \file src/runtime/contrib/vsi_npu/dnnl_json_runtime.cc
- * \brief A simple JSON runtime for VsiNpu.
- */
-
 #include <tvm/runtime/ndarray.h>
 #include <tvm/runtime/registry.h>
 
