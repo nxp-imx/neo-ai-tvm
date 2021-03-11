@@ -1,0 +1,33 @@
+NXP Software Content Register
+
+Release - NXPMicro/TVM
+
+--------------------------------------------
+Reused external packages
+--------------------------------------------
+
+Package:                     apache/tvm
+Outgoing License:            Apache License, Version 2.0
+License File:                https://github.com/apache/tvm/blob/main/LICENSE
+Package Category:            Apahce TVM project
+Type of Content:             source code
+Description and comments:    Apache TVM is a compiler stack for deep learning systems
+Origin:                      https://github.com/apache/tvm
+Release location: 
+
+--------------------------------------------
+NXP Files
+--------------------------------------------
+
+sources:
+cmake/modules/contrib/VsiNpu.cmake
+python/tvm/relay/op/contrib/vsi_npu.py
+src/runtime/contrib/vsi_npu/*
+src/relay/backend/contrib/vsi_npu/*
+tests/python/contrib/test_vsi_npu/*
+
+Copyright:
+Copyright 2021 NXP
+
+License:
+Apache License, Version 2.0
