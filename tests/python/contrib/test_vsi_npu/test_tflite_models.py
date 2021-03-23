@@ -31,8 +31,9 @@ from tvm.relay.op.contrib import vsi_npu
 from tvm.contrib.download import download_testdata
 
 from tflite_deeplab import *
+import argparse
 
-RPC_HOST = "10.193.20.60"
+RPC_HOST = ""
 RPC_PORT = 9090
 MEASURE_PERF = False
 VERBOSE = False
@@ -341,57 +342,29 @@ def verify_tvm_result(ref_output, shape, model_name, image_data):
         assert ref_idx == out_idx
 
 
-def print_help():
-    print("Usage: \n",
-          '  -r[--rpc]    IP:Port\n',
-          '  -m[--models] "model_list ...", all models by default\n',
-          '  [--perf] benchmark performance\n',
-          '  [--verbose] print more logs\n')
-    print("Supported models:")
-    print(list(SUPPORTED_MODELS.keys()))
-    sys.exit(1)
+parser = argparse.ArgumentParser(description='VSI-NPU test script for tflite models.')
+parser.add_argument('-i', '--ip', type=str, required=True,
+                    help='ip address for remote target board')
+parser.add_argument('-p', '--port', type=int, default=9090,
+                    help='port number for remote target board')
+parser.add_argument('-m', '--models', nargs='*', default=SUPPORTED_MODELS,
+                    help='models list to test')
+parser.add_argument('--perf', action='store_true',
+                    help='benchmark performance')
+parser.add_argument('--verbos', action='store_true',
+                    help='print more logs')
 
+args = parser.parse_args()
 
-def parse_command_args():
-    import getopt
-    import re
-
-    global RPC_HOST, RPC_PORT, MEASURE_PERF, VERBOSE
-    models_input = []
-    try:
-        opts, args = getopt.getopt(
-                         sys.argv[1:], "hr:m:v",
-                         ["help", "rpc=", "models=", "perf", "verbose"])
-    except getopt.GetoptError:   # not supported option
-        print_help()
-
-    if args:  # not support argument without '-'
-        print_help()
-
-    for opt, arg in opts:
-        if opt in ("-h", "--help"):
-            print_help()
-        elif opt in ("-r", "--rpc"):
-            rpc_ = arg.split(":")
-            if (len(rpc_) != 2):
-                raise Exception("invalid rcp address: %s" % arg)
-            RPC_HOST = rpc_[0].strip()
-            RPC_PORT = int(rpc_[1].strip())
-        elif opt in ("-m", "--models"):
-            models_input = ' '.join(re.split(' |,|;', arg.strip())).split()
-        elif opt in ("--perf"):
-            MEASURE_PERF = True
-        elif opt in ("-v", "--verbose"):
-            VERBOSE = True
-
-    return models_input
-
+RPC_HOST = args.ip
+RPC_PORT = args.port
+MEASURE_PERF = args.perf
+VERBOSE = args.verbos
 
 init_supported_models()
-args = parse_command_args()
 models_to_run = {}
 
-for m in args:
+for m in args.models:
     if m not in SUPPORTED_MODELS.keys():
         print("{} is not supported!".format(m))
         print("Supported models: {}".format(list(SUPPORTED_MODELS.keys())))
@@ -399,9 +372,6 @@ for m in args:
     else:
         models_to_run[m] = SUPPORTED_MODELS[m]
 
-
-if len(models_to_run) == 0:
-    models_to_run = SUPPORTED_MODELS
 
 print(f"\nTesting {len(models_to_run)} model(s): {list(models_to_run.keys())}")
 
