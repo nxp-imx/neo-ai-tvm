@@ -12,12 +12,14 @@ Please follow the [LLVM Doc](https://llvm.org/docs/) to install LLVM on the host
 
 Conceptually, TVM can be splitted into two parts.
 
-`tvm build stack`: compiles the deep learing model at host
-`tvm runtime`: loads and interprets the model at device
+1. `tvm build stack`: compiles the deep learing model at host
+2. `tvm runtime`: loads and interprets the model at device
 
+#Build `tvm build stack` for host
 ```bash
-git clone --recursive {this git} tvm
-cd tvm
+export TOP_DIR=`pwd`
+git clone --recursive {this git} tvm-host
+cd tvm-host
 mkdir build
 cp cmake/config.cmake build
 cd build
@@ -26,9 +28,33 @@ cmake ..
 make tvm -j4  # make tvm build stack
 ```
 
-To make the runtime for target device
+#Build `tvm runtime` for target device
+
+To build the runtime for target device, the cross-compiling environment should be installed first
+
+Build the `tim-vx` library
 ```bash
-setup the cross-compiling environment for the target device
+cd ${TOP_DIR}
+source {cross tool-chain directory}/environment-setup-aarch64-poky-linux
+git clone {vsi-tim-vx repository}
+cd vsi-tim-vx
+cp -a include/tim {cross tool-chain directory}/sysroots/aarch64-poky-linux/usr/include/
+mkdir build
+cd build
+cmake ..
+make
+```
+
+Build the `tvm runtime`
+```bash
+cd ${TOP_DIR}
+source {cross tool-chain directory}/environment-setup-aarch64-poky-linux
+git clone --recursive {this git} tvm-runtime
+cd tvm-runtime
+mkdir build
+cp cmake/config.cmake build
+cd build
+sed -i 's/USE_VSI_NPU_RUNTIME\ OFF/USE_VSI_NPU_RUNTIME\ ON/' config.cmake  # turn on npu runtime
 make runtime -j4
 ```
 
@@ -38,68 +64,35 @@ Please refer [TVM Doc](https://tvm.apache.org/docs/) for more details.
 ## Install tvm build stack on host
 
 ```bash
-EXPORT TVM_HOME=/workspace/tvm   # assume this tvm repo is put under /workspace
+EXPORT TVM_HOME=${TOP_DIR}/tvm-host
 EXPORT PYTHONPATH=$TVM_HOME/python
 python3 -c "import tvm"  # test if the tvm is installed
 ```
 
 ## Deploy tvm runtime to device
-
+Copy `tim-vx` library,`tvm runtime`library and python package to device
+```bash
+scp -r ${TOP_DIR}/tvm-runtime/python/tvm root@{device ip}:/usr/lib/python3.7/site-packages/
+scp ${TOP_DIR}/vsi-tim-vx/build/src/tim/vx/libtim-vx.so root@{device ip}:/usr/lib/
+scp ${TOP_DIR}/tvm-runtime/build/libtvm_runtime.so root@{device ip}:/usr/lib/
+```
 
 
 # Getting Started
 
-## Compile a pre-trained model
+Run examples at tvm/tests/python/contrib/test_vsi_npu/ with rpc verification
 
+# Bootup rpc server on device
 ```bash
-
-import tvm
-from tvm import relay, transform
-from tvm import rpc
-from tvm.contrib import graph_runtime
-from tvm import te
-from tvm.contrib import graph_runtime as runtime
-from tvm.contrib import util
-from tvm.relay.op.contrib import vsi_npu
-
-
-# Load tflite model into buffer
-tflite_model_file="mobilenet_v1_1.0_224_quant.tflite"
-tflite_model_buf = open(tflite_model_file, "rb").read()
-
-# Get tflite model from buffer
-try:
-    import tflite
-    model = tflite.Model.GetRootAsModel(tflite_model_buf, 0)
-except AttributeError:
-    import tflite.Model
-    model = tflite.Model.Model.GetRootAsModel(tflite_model_buf, 0)
-
-# Parse the tflite model
-shape = shape = (1, 224, 224, 3)
-inputs = 'input'
-mod, params = relay.frontend.from_tflite(
-    model, shape_dict={inputs: shape}, dtype_dict={inputs: "uint8"}
-)
-
-# Compile the model
-lib_path = "./model.so"
-
-kwargs = {}
-kwargs["cc"] = "aarch64-linux-gnu-gcc"
-target = "llvm  -mtriple=aarch64-linux-gnu"
-with transform.PassContext(opt_level=3, disabled_pass=["AlterOpLayout"]):
-    mod = vsi_npu.partition_for_vsi_npu(mod, params)
-    lib = relay.build(mod, target, params=params)
-    lib.export_library(lib_path, fcompile=False, **kwargs)
-
+python3 -m tvm.exec.rpc_server --host 0.0.0.0 --port=9090
 ```
 
-The generated model is saved as model.so
+# Run the test script on host
+```bash
+cd ${TOP_DIR}/tvm-host
+python3 tests/python/contrib/test_vsi_npu/test_tflite_models.py -i {device ip}
+```
 
-## Running the compiled model on device
-
-See more examples at tvm/tests/python/contrib/test_vsi_npu/ with rpc verification
 
 # Supported TFlite models
 
