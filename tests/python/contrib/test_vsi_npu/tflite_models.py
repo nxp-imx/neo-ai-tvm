@@ -72,11 +72,6 @@ def init_supported_models():
     m.is_quant = True
     m.inputs = 'normalized_input_image_tensor'
 
-    where = "http://10.192.208.75/images/gf/tvm"
-    m = add_supported_model("mobilenet_ssd_v1_trimmed_converted", where, formats='tflite')
-    m.input_size = 300
-    m.inputs = 'Preprocessor/sub'
-
     where = "http://download.tensorflow.org/models/mobilenet_v1_2018_08_02"
     add_supported_model("mobilenet_v1_0.25_128", where, QUANT)
     add_supported_model("mobilenet_v1_0.25_224", where, QUANT)
