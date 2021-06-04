@@ -392,17 +392,17 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto end = node.GetAttr<std::vector<std::string>>("end");
     auto strides = node.GetAttr<std::vector<std::string>>("strides");
 
+    CHECK(begin.size() == end.size()) << "StridedSlice layer 'begin' dim number doesn't match 'end' dim number.";
     std::vector<int32_t> vx_begin;
+    std::vector<int32_t> vx_end;
+    std::vector<int32_t> vx_stride;
     for (unsigned int i = 0; i < begin.size(); i ++) {
       vx_begin.push_back(std::stoi(begin[begin.size() - i - 1]));
-    }
-    std::vector<int32_t> vx_end;
-    for (unsigned int i = 0; i < end.size(); i ++) {
       vx_end.push_back(std::stoi(end[end.size() - i - 1]));
-    }
-    std::vector<int32_t> vx_stride;
-    for (unsigned int i = 0; i < strides.size(); i ++) {
-      vx_stride.push_back(std::stoi(strides[strides.size() - i - 1]));
+      if (i < strides.size())
+        vx_stride.push_back(std::stoi(strides[strides.size() - i - 1]));
+      else
+        vx_stride.push_back(1);
     }
 
     JSONGraphNodeEntry out_entry(nid, 0);
@@ -428,7 +428,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     }
 
     bool vx_keepdims;
-    if (keepdims == "True") {
+    if (keepdims == "1") {
       vx_keepdims = true;
     } else {
       vx_keepdims = false;
