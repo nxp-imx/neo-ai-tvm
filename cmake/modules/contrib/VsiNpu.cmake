@@ -18,5 +18,9 @@
 if(USE_VSI_NPU)
 	file(GLOB VSI_NPU_RELAY_CONTRIB_SRC src/relay/backend/contrib/vsi_npu/codegen_vsi_npu.cc)
 	list(APPEND COMPILER_SRCS ${VSI_NPU_RELAY_CONTRIB_SRC})
+
+	file(GLOB VSI_NPU_CONTRIB_SRC src/runtime/contrib/vsi_npu/vsi_npu.cc)
+	list(APPEND RUNTIME_SRCS ${VSI_NPU_CONTRIB_SRC})
+
 	message(STATUS "Build with VSI NPU support ...")
 endif(USE_VSI_NPU)
