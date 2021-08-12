@@ -239,6 +239,9 @@ set(USE_VITIS_AI OFF)
 # Build Verilator codegen and runtime
 set(USE_VERILATOR OFF)
 
+# Whether to build with vsi-npu support
+set(USE_VSI_NPU OFF)
+
 # Build ANTLR parser for Relay text format
 # Possible values:
 # - ON: enable ANTLR by searching default locations (cmake find_program for antlr4 and /usr/local for jar)
