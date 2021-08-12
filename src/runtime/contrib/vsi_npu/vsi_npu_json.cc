@@ -33,23 +33,23 @@
 #include "../json/json_runtime.h"
 
 #ifdef USE_VSI_NPU_RUNTIME
-#include "ovxlibxx/context.h"
-#include "ovxlibxx/graph.h"
-#include "ovxlibxx/tensor.h"
-#include "ovxlibxx/operation.h"
-#include "ovxlibxx/operations/fullyconnected.h"
-#include "ovxlibxx/operations/activations.h"
-#include "ovxlibxx/operations/softmax.h"
-#include "ovxlibxx/operations/reshape.h"
-#include "ovxlibxx/operations/resize.h"
-#include "ovxlibxx/operations/pool2d.h"
-#include "ovxlibxx/operations/conv2d.h"
-#include "ovxlibxx/operations/batchnorm.h"
-#include "ovxlibxx/operations/add.h"
-#include "ovxlibxx/operations/permute.h"
-#include "ovxlibxx/operations/clip.h"
-#include "ovxlibxx/operations/concat.h"
-#include "ovxlibxx/operations/dropout.h"
+#include "tim/vx/context.h"
+#include "tim/vx/graph.h"
+#include "tim/vx/tensor.h"
+#include "tim/vx/operation.h"
+#include "tim/vx/ops/fullyconnected.h"
+#include "tim/vx/ops/activations.h"
+#include "tim/vx/ops/softmax.h"
+#include "tim/vx/ops/reshape.h"
+#include "tim/vx/ops/resize.h"
+#include "tim/vx/ops/pool2d.h"
+#include "tim/vx/ops/conv2d.h"
+#include "tim/vx/ops/batchnorm.h"
+#include "tim/vx/ops/elementwise.h"
+#include "tim/vx/ops/transpose.h"
+#include "tim/vx/ops/clip.h"
+#include "tim/vx/ops/concat.h"
+#include "tim/vx/ops/dropout.h"
 
 #include "vsi_utils.h"
 #endif
@@ -110,7 +110,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
  private:
 
   void BuildEngine() {
-    context_ = vsi::Context::Create();
+    context_ = tim::vx::Context::Create();
     graph_ = context_->CreateGraph();
 
     for (size_t nid = 0; nid < nodes_.size(); ++nid) {
@@ -168,7 +168,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     std::vector<uint32_t> output_shape = vsi_output->GetShape();
 
-    auto reshape = graph_->CreateOperation<vsi::Reshape>(output_shape);
+    auto reshape = graph_->CreateOperation<tim::vx::ops::Reshape>(output_shape);
     (*reshape).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(reshape);
   }
@@ -183,16 +183,16 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::string layout = node.GetAttr<std::vector<std::string>>("layout")[0];
 
     std::vector<int32_t> vsi_size;
-    vsi::ResizeType vsi_type;
+    tim::vx::ResizeType vsi_type;
     bool align_corners = 0;
     bool half_pixel = 0;
 
     vsi_size.push_back(std::stoi(size[0]));
     vsi_size.push_back(std::stoi(size[1]));
     if(method == "bilinear") {
-      vsi_type = vsi::ResizeType::BILINEAR;
+      vsi_type = tim::vx::ResizeType::BILINEAR;
     } else if (method == "nearest_neighbor") {
-      vsi_type = vsi::ResizeType::NEAREST_NEIGHBOR;
+      vsi_type = tim::vx::ResizeType::NEAREST_NEIGHBOR;
     } else {
       LOG(FATAL) << "Unsupported method for Resize layer " << method;
     }
@@ -214,7 +214,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         CHECK(layout == "NCHW") << "Resize layer requires 1 inputs.";
     }
 
-    auto resize = graph_->CreateOperation<vsi::Resize>(vsi_type, 0, vsi_size, align_corners, half_pixel);
+    auto resize = graph_->CreateOperation<tim::vx::ops::Resize>(vsi_type, 0, align_corners,
+                                                                half_pixel, vsi_size[0], vsi_size[1]);
     (*resize).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(resize);
   }
@@ -226,8 +227,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     size_t num_inputs = inputs.size();
     JSONGraphNodeEntry out_entry(nid, 0);
     
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
 
     bool has_bias;
     if (node.GetOpName() == "qnn.dense") {
@@ -251,7 +252,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     }
 
     auto weight_tensor = vsi_inputs[1];
-    auto fc = graph_->CreateOperation<vsi::FullyConnected>(1, weight_tensor->GetShape()[1]);
+    auto fc = graph_->CreateOperation<tim::vx::ops::FullyConnected>(1, weight_tensor->GetShape()[1]);
     (*fc).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
     ops_.push_back(fc);
   }
@@ -264,14 +265,14 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     JSONGraphNodeEntry out_entry(nid, 0);
 
-    std::shared_ptr<vsi::Tensor> vsi_input;
-    std::shared_ptr<vsi::Tensor> vsi_output;
+    std::shared_ptr<tim::vx::Tensor> vsi_input;
+    std::shared_ptr<tim::vx::Tensor> vsi_output;
 
     vsi_input = MakeVSITensorFromJSONEntry(data_entry);
 
     vsi_output = MakeVSITensorFromJSONEntry(out_entry);
 
-    auto _op = graph_->CreateOperation<vsi::Relu>();
+    auto _op = graph_->CreateOperation<tim::vx::ops::Relu>();
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(_op);
   }
@@ -285,8 +286,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     JSONGraphNodeEntry out_entry(nid, 0);
 
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
 
     auto input_cnt = inputs.size();
 
@@ -305,7 +306,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
     }
 
-    auto add = graph_->CreateOperation<vsi::Add>();
+    auto add = graph_->CreateOperation<tim::vx::ops::Add>();
     (*add).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
     ops_.push_back(add);
   }
@@ -322,7 +323,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
     auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
 
-    auto clip = graph_->CreateOperation<vsi::Clip>(std::stof(min), std::stof(max));
+    auto clip = graph_->CreateOperation<tim::vx::ops::Clip>(std::stof(min), std::stof(max));
     (*clip).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(clip);
   }
@@ -346,7 +347,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
     auto vsi_output =  MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
 
-    auto permute = graph_->CreateOperation<vsi::Permute>(perm);
+    auto permute = graph_->CreateOperation<tim::vx::ops::Transpose>(perm);
     (*permute).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(permute);
   }
@@ -367,8 +368,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     JSONGraphNodeEntry out_entry(nid, 0);
 
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
 
     vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0]));
     vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[3]));
@@ -380,15 +381,15 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     float epsilon = std::stof(node.GetAttr<std::vector<std::string>>("epsilon")[0]);
 
-    auto bn = graph_->CreateOperation<vsi::BatchNorm>(epsilon);
+    auto bn = graph_->CreateOperation<tim::vx::ops::BatchNorm>(epsilon);
     (*bn).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
     ops_.push_back(bn);
   }
 
   void Pool2d(const size_t& nid) {
 
-    vsi::PoolType pool_type;
-    vsi::RoundType round_type;
+    tim::vx::PoolType pool_type;
+    tim::vx::RoundType round_type;
 
     auto node = nodes_[nid];
     auto inputs = node.GetInputs();
@@ -407,46 +408,45 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::vector<std::string> tvm_ceil_mode = node.GetAttr<std::vector<std::string>>("ceil_mode");
 
     if (std::stoi(tvm_ceil_mode[0]) > 0) {
-        round_type = vsi::RoundType::CEILING;
+        round_type = tim::vx::RoundType::CEILING;
     } else {
-        round_type = vsi::RoundType::FLOOR;
+        round_type = tim::vx::RoundType::FLOOR;
     }
 
     if (node.GetOpName() == "nn.max_pool2d") {
-      pool_type = vsi::PoolType::MAX;
+      pool_type = tim::vx::PoolType::MAX;
     } else if (node.GetOpName() == "nn.avg_pool2d" || node.GetOpName() == "qnn.avg_pool2d") {
-      pool_type = vsi::PoolType::AVG;
+      pool_type = tim::vx::PoolType::AVG;
     } else {
       LOG(FATAL) << "Pooling type not supported: " << node.GetOpName();
     }
 
-    std::vector<uint32_t> vsi_ksize;
-    for (const auto& i : tvm_pool_size) {
-        vsi_ksize.push_back(std::stoi(i));
-    }
+    std::array<uint32_t, 2> vsi_ksize;
+    vsi_ksize[0] = std::stoi(tvm_pool_size[0]);
+    vsi_ksize[1] = std::stoi(tvm_pool_size[1]);
 
-    std::vector<uint32_t> vsi_stride;
-    for (const auto& i : tvm_strides) {
-        vsi_stride.push_back(std::stoi(i));
-    }
+    std::array<uint32_t, 2> vsi_stride;
+    vsi_stride[0] = std::stoi(tvm_strides[0]);
+    vsi_stride[1] = std::stoi(tvm_strides[1]);
 
-    std::vector<uint32_t> vsi_pad;
-    vsi_pad.push_back(std::stoi(tvm_pad[1]));
-    vsi_pad.push_back(std::stoi(tvm_pad[3]));
-    vsi_pad.push_back(std::stoi(tvm_pad[0]));
-    vsi_pad.push_back(std::stoi(tvm_pad[2]));
+    std::array<uint32_t, 4> vsi_pad;
+    vsi_pad[0] = std::stoi(tvm_pad[1]);
+    vsi_pad[1] = std::stoi(tvm_pad[3]);
+    vsi_pad[2] = std::stoi(tvm_pad[0]);
+    vsi_pad[3] = std::stoi(tvm_pad[2]);
 
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
     auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
 
-    auto pool = graph_->CreateOperation<vsi::Pool2d>(pool_type, vsi::PadType::AUTO, vsi_ksize, vsi_stride, vsi_pad, round_type);
+    auto pool = graph_->CreateOperation<tim::vx::ops::Pool2d>(pool_type, tim::vx::PadType::AUTO,
+                                                         vsi_ksize, vsi_stride, vsi_pad, round_type);
     (*pool).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(pool);
   }
 
   void GlobalPool2d(const size_t& nid) {
 
-    vsi::PoolType pool_type;
+    tim::vx::PoolType pool_type;
 
     auto node = nodes_[nid];
     //JSONGraphNodeEntry input
@@ -455,27 +455,27 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     JSONGraphNodeEntry out_entry(nid, 0);
 
     if (node.GetOpName() == "nn.global_max_pool2d") {
-      pool_type = vsi::PoolType::MAX;
+      pool_type = tim::vx::PoolType::MAX;
     } else if (node.GetOpName() == "nn.global_avg_pool2d") {
-      pool_type = vsi::PoolType::AVG;
+      pool_type = tim::vx::PoolType::AVG;
     } else {
       LOG(FATAL) << "Pooling type not supported: " << node.GetOpName();
     }
 
-    std::shared_ptr<vsi::Tensor> vsi_input;
-    std::shared_ptr<vsi::Tensor> vsi_output;
+    std::shared_ptr<tim::vx::Tensor> vsi_input;
+    std::shared_ptr<tim::vx::Tensor> vsi_output;
 
     vsi_input = MakeVSITensorFromJSONEntry(data_entry);
 
     vsi_output = MakeVSITensorFromJSONEntry(out_entry);
     auto vsi_shap = vsi_input->GetShape();
     //layout is swapped, NCHW-->WHCN, [0]:W, [1]:H
-    std::vector<uint32_t> ksize = {vsi_shap[0], vsi_shap[1]};
+    std::array<uint32_t, 2> ksize = {vsi_shap[0], vsi_shap[1]};
     //stride
-    std::vector<uint32_t> stride = {1, 1};
-    std::vector<uint32_t> pad = {0, 0, 0, 0};
+    std::array<uint32_t, 2> stride = {1, 1};
+    std::array<uint32_t, 4> pad = {0, 0, 0, 0};
 
-    auto _op = graph_->CreateOperation<vsi::Pool2d>(pool_type, vsi::PadType::AUTO, ksize, stride, pad);
+    auto _op = graph_->CreateOperation<tim::vx::ops::Pool2d>(pool_type, tim::vx::PadType::AUTO, ksize, stride, pad);
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(_op);
   }
@@ -493,8 +493,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     JSONGraphNodeEntry out_entry(nid, 0);
 
-    std::shared_ptr<vsi::Tensor> vsi_input;
-    std::shared_ptr<vsi::Tensor> vsi_output;
+    std::shared_ptr<tim::vx::Tensor> vsi_input;
+    std::shared_ptr<tim::vx::Tensor> vsi_output;
     std::cout << "inputs.size" << inputs.size() << std::endl;
     CHECK(inputs.size() == 1U || inputs.size() == 5U)
           << "Softmax requires 5 inputs with quantization, 1 inputs without.";
@@ -507,7 +507,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     }
 
     //set beta to 1.0
-    auto _op = graph_->CreateOperation<vsi::Softmax>(1.0f, axis_data_vsi);
+    auto _op = graph_->CreateOperation<tim::vx::ops::Softmax>(1.0f, axis_data_vsi);
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(_op);
   }
@@ -524,8 +524,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     //ratio_vsi = ConvertAxis(std::stoi(ratio_tvm), shape_tvm.size());
     ratio_vsi = std::stoi(ratio_tvm);
 
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
 
     for (const auto& i : inputs) {
       vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
@@ -534,7 +534,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     JSONGraphNodeEntry out_entry(nid, 0);
     vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
 
-    auto dropout = graph_->CreateOperation<vsi::Dropout>(ratio_vsi);
+    auto dropout = graph_->CreateOperation<tim::vx::ops::Dropout>(ratio_vsi);
     (*dropout).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
     ops_.push_back(dropout);
   }
@@ -552,8 +552,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     auto input_cnt = inputs.size();
 
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
 
     JSONGraphNodeEntry out_entry(nid, 0);
     if (node.GetOpName() == "qnn.concatenate") {
@@ -573,7 +573,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry));
     }
 
-    auto concat = graph_->CreateOperation<vsi::Concat>(axis_vsi, input_cnt);
+    auto concat = graph_->CreateOperation<tim::vx::ops::Concat>(axis_vsi, input_cnt);
     (*concat).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
     ops_.push_back(concat);
   }
@@ -589,8 +589,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     // Collect inputs and outputs, handling both nn.conv2d and qnn.conv2d cases.
     std::vector<JSONGraphNodeEntry> inputs = node.GetInputs();
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_inputs;
-    std::vector<std::shared_ptr<vsi::Tensor>> vsi_outputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_inputs;
+    std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
     size_t num_inputs = inputs.size();
     JSONGraphNodeEntry out_entry(nid, 0);
     bool has_bias;
@@ -632,31 +632,31 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     // TVM: top, left, bottom, right -> VSI: left, right, top, bottom
     auto weight_tensor = vsi_inputs[1];
-    std::vector<uint32_t> vsi_pad;
-    vsi_pad.push_back(std::stoi(pad[1]));
-    vsi_pad.push_back(std::stoi(pad[3]));
-    vsi_pad.push_back(std::stoi(pad[0]));
-    vsi_pad.push_back(std::stoi(pad[2]));
+    std::array<uint32_t, 4> vsi_pad;
+    vsi_pad[0] = std::stoi(pad[1]);
+    vsi_pad[1] = std::stoi(pad[3]);
+    vsi_pad[2] = std::stoi(pad[0]);
+    vsi_pad[3] = std::stoi(pad[2]);
 
-    std::vector<uint32_t> vsi_strides;
-    vsi_strides.push_back(std::stoi(strides[0]));
-    vsi_strides.push_back(std::stoi(strides[1]));
+    std::array<uint32_t, 2> vsi_strides;
+    vsi_strides[0] = std::stoi(strides[0]);
+    vsi_strides[1] = std::stoi(strides[1]);
 
-    std::vector<uint32_t> vsi_dilation;
-    vsi_dilation.push_back(std::stoi(dilation[0]));
-    vsi_dilation.push_back(std::stoi(dilation[1]));
+    std::array<uint32_t, 2> vsi_dilation;
+    vsi_dilation[0] = std::stoi(dilation[0]);
+    vsi_dilation[1] = std::stoi(dilation[1]);
 
-    std::vector<uint32_t> vsi_ksize;
-    vsi_ksize.push_back(weight_tensor->GetShape()[0]);
-    vsi_ksize.push_back(weight_tensor->GetShape()[1]);
+    std::array<uint32_t, 2> vsi_ksize;
+    vsi_ksize[0] = weight_tensor->GetShape()[0];
+    vsi_ksize[1] = weight_tensor->GetShape()[1];
 
     if (!has_bias) {
       vsi_inputs.push_back(MakeDummyBiasTensor(vsi_inputs[0]->GetDataType(),
 			      {weight_tensor->GetShape()[3]}));
     }
 
-    auto conv = graph_->CreateOperation<vsi::Conv2d>(channels,
-		    vsi::PadType::AUTO, vsi_ksize, vsi_strides, vsi_dilation,
+    auto conv = graph_->CreateOperation<tim::vx::ops::Conv2d>(channels,
+		    tim::vx::PadType::AUTO, vsi_ksize, vsi_strides, vsi_dilation,
 		    vsi_pad, groups, vsi_multiplier);
     (*conv).BindInputs(vsi_inputs).BindOutputs(vsi_outputs);
     ops_.push_back(conv);
@@ -688,11 +688,11 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
    * \param offset (optional) The offset of the tensor as an input.
    * \return VSI Tensor.
    */
-  std::shared_ptr<vsi::Tensor> MakeVSITensorFromJSONEntry(const JSONGraphNodeEntry& tensor,
+  std::shared_ptr<tim::vx::Tensor> MakeVSITensorFromJSONEntry(const JSONGraphNodeEntry& tensor,
                                                  JSONGraphNodeEntry* scale = nullptr,
                                                  JSONGraphNodeEntry* offset = nullptr,
                                                  std::vector<int64_t> *in_shape = nullptr) {
-    vsi::Quantization vsi_quant;
+    tim::vx::Quantization vsi_quant;
     if (scale != nullptr && offset != nullptr) {
       auto scale_tensor = data_entry_[EntryID(*scale)];
       auto offset_tensor = data_entry_[EntryID(*offset)];
@@ -700,13 +700,13 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       std::vector<int> offset_data = GetVectorFromDLTensor<int>(offset_tensor);
       CHECK(scale_data.size() == 1 && offset_data.size() == 1)
             << "Currently only per-layer quantization is supported in the VSI runtime.";
-      vsi_quant = vsi::Quantization(vsi::QuantType::ASYMMETRIC, scale_data[0], offset_data[0]);
+      vsi_quant = tim::vx::Quantization(tim::vx::QuantType::ASYMMETRIC, scale_data[0], offset_data[0]);
     }
 
     return MakeVSITensorFromJSONEntry(tensor, vsi_quant, in_shape);
   }
-  std::shared_ptr<vsi::Tensor> MakeVSITensorFromJSONEntry(const JSONGraphNodeEntry& tensor,
-                                                 const vsi::Quantization vsi_quant,
+  std::shared_ptr<tim::vx::Tensor> MakeVSITensorFromJSONEntry(const JSONGraphNodeEntry& tensor,
+                                                 const tim::vx::Quantization vsi_quant,
                                                  std::vector<int64_t> *in_shape = nullptr) {
     auto eid = EntryID(tensor);
 
@@ -717,17 +717,17 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     //create new VSItensor
     JSONGraphNode node = nodes_[tensor.id_];
     void* node_data = nullptr;
-    vsi::TensorAttribute vsi_attr;
+    tim::vx::TensorAttribute vsi_attr;
 
     if (node.GetOpType() == "const") {
       node_data = data_entry_[EntryID(tensor)]->data;
-      vsi_attr = vsi::TensorAttribute::CONSTANT;
+      vsi_attr = tim::vx::TensorAttribute::CONSTANT;
     } else if (IsInputNode(tensor.id_)) {
-      vsi_attr = vsi::TensorAttribute::INPUT;
+      vsi_attr = tim::vx::TensorAttribute::INPUT;
     } else if (IsOutputNode(tensor.id_)) {
-      vsi_attr = vsi::TensorAttribute::OUTPUT;
+      vsi_attr = tim::vx::TensorAttribute::OUTPUT;
     } else {
-      vsi_attr = vsi::TensorAttribute::TRANSIENT;
+      vsi_attr = tim::vx::TensorAttribute::TRANSIENT;
     }
 
     auto vsi_tensor = MakeVSITensor(node, node_data, vsi_attr, vsi_quant, in_shape);
@@ -735,25 +735,25 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     return entry_out_tensor_[eid];
   }
 
-  std::shared_ptr<vsi::Tensor> MakeDummyBiasTensor(vsi::DataType dtype,
-		 		 vsi::ShapeType bias_shape) {
+  std::shared_ptr<tim::vx::Tensor> MakeDummyBiasTensor(tim::vx::DataType dtype,
+		 		 tim::vx::ShapeType bias_shape) {
     std::vector<float> bias_data(bias_shape[0], 0);
 
-    vsi::TensorSpec bias_spec(dtype, bias_shape,
-		    vsi::TensorAttribute::CONSTANT);
+    tim::vx::TensorSpec bias_spec(dtype, bias_shape,
+		    tim::vx::TensorAttribute::CONSTANT);
     auto bias = graph_->CreateTensor(bias_spec, bias_data.data());
     dummy_tensor_.push_back(bias);
 
     return bias;
   }
 
-  std::shared_ptr<vsi::Tensor> MakeVSITensor(const JSONGraphNode& tensor_rep, void* data,
-				  vsi::TensorAttribute vsi_attr,
-				  const vsi::Quantization vsi_quant,
+  std::shared_ptr<tim::vx::Tensor> MakeVSITensor(const JSONGraphNode& tensor_rep, void* data,
+				  tim::vx::TensorAttribute vsi_attr,
+				  const tim::vx::Quantization vsi_quant,
                                   std::vector<int64_t> *in_shape = nullptr) {
     //VSI parameter
-    vsi::ShapeType vsi_shape;
-    vsi::DataType vsi_dtype;
+    tim::vx::ShapeType vsi_shape;
+    tim::vx::DataType vsi_dtype;
     //TVM parameter
     std::vector<int64_t> tvm_shape;
     DLDataType tvm_dtype = tensor_rep.GetOpDataType()[0];
@@ -768,20 +768,17 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     }
 
     if (tvm_dtype.code == DLDataTypeCode::kDLFloat && tvm_dtype.bits == 32) {
-      vsi_dtype = vsi::DataType::FLOAT32;
-      std::cout << "vsi::DataType::FLOAT32" << std::endl;
+      vsi_dtype = tim::vx::DataType::FLOAT32;
     } else if (tvm_dtype.code == DLDataTypeCode::kDLUInt && tvm_dtype.bits == 8) {
-      vsi_dtype = vsi::DataType::UINT8;
-      std::cout << "vsi::DataType::UINT8" << std::endl;
+      vsi_dtype = tim::vx::DataType::UINT8;
     } else if (tvm_dtype.code == DLDataTypeCode::kDLInt && tvm_dtype.bits == 32) {
-      vsi_dtype = vsi::DataType::INT32;
-      std::cout << "vsi::DataType::INT32" << std::endl;
+      vsi_dtype = tim::vx::DataType::INT32;
     } else {
       LOG(FATAL) << "Unsupported data type.";
     }
 
-    auto input_spec = vsi::TensorSpec(vsi_dtype, vsi_shape, vsi_attr, vsi_quant);
-    std::shared_ptr<vsi::Tensor> tensor;
+    auto input_spec = tim::vx::TensorSpec(vsi_dtype, vsi_shape, vsi_attr, vsi_quant);
+    std::shared_ptr<tim::vx::Tensor> tensor;
     if (data != nullptr)
       tensor = graph_->CreateTensor(input_spec, data);
     else
@@ -789,12 +786,12 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     return tensor;
   }
 
-  std::shared_ptr<vsi::Tensor> PermuteVsiTensor(std::shared_ptr<vsi::Tensor> tensor,
+  std::shared_ptr<tim::vx::Tensor> PermuteVsiTensor(std::shared_ptr<tim::vx::Tensor> tensor,
                                                 std::vector<uint32_t> perm,
                                                 bool input) {
     auto temp = graph_->CreateTensor(tensor->GetSpec().AsTransientSpec());
 
-    std::shared_ptr<vsi::Operation> op = graph_->CreateOperation<vsi::Permute>(perm);
+    std::shared_ptr<tim::vx::Operation> op = graph_->CreateOperation<tim::vx::ops::Transpose>(perm);
     if (input) {
       (*op).BindInput(tensor);
       (*op).BindOutput(temp);
@@ -808,12 +805,12 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     return temp;
   }
 
-  std::shared_ptr<vsi::Context> context_;
-  std::shared_ptr<vsi::Graph> graph_;
+  std::shared_ptr<tim::vx::Context> context_;
+  std::shared_ptr<tim::vx::Graph> graph_;
   /* The entry ID to its corresponding output memory. */
-  std::unordered_map<uint32_t, std::shared_ptr<vsi::Tensor>> entry_out_tensor_;
-  std::vector<std::shared_ptr<vsi::Tensor>> dummy_tensor_;
-  std::vector<std::shared_ptr<vsi::Operation>> ops_;
+  std::unordered_map<uint32_t, std::shared_ptr<tim::vx::Tensor>> entry_out_tensor_;
+  std::vector<std::shared_ptr<tim::vx::Tensor>> dummy_tensor_;
+  std::vector<std::shared_ptr<tim::vx::Operation>> ops_;
 };
 
 #else
