@@ -60,4 +60,8 @@ def _register_external_op_helper(op_name, supported=True):
 
 
 _register_external_op_helper("add")
-
+_register_external_op_helper("nn.batch_flatten")
+_register_external_op_helper("nn.bias_add")
+_register_external_op_helper("nn.dense")
+_register_external_op_helper("nn.relu")
+_register_external_op_helper("nn.softmax")

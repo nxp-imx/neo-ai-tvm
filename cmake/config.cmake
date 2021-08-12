@@ -240,7 +240,8 @@ set(USE_VITIS_AI OFF)
 set(USE_VERILATOR OFF)
 
 # Whether to build with vsi-npu support
-set(USE_VSI_NPU OFF)
+set(USE_VSI_NPU ON)
+set(USE_VSI_NPU_RUNTIME OFF)
 
 # Build ANTLR parser for Relay text format
 # Possible values:

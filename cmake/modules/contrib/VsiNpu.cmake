@@ -15,11 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-if(USE_VSI_NPU)
+if((USE_VSI_NPU STREQUAL "ON") OR (USE_VSI_NPU STREQUAL "JSON"))
+	file(GLOB VSI_NPU_RELAY_CONTRIB_SRC src/relay/backend/contrib/vsi_npu/codegen_json.cc)
+	list(APPEND COMPILER_SRCS ${VSI_NPU_RELAY_CONTRIB_SRC})
+	message(STATUS "Build with VSI NPU support ...")
+
+if(USE_VSI_NPU_RUNTIME)
+	add_definitions(-DUSE_VSI_NPU_RUNTIME=1)
+endif(USE_VSI_NPU_RUNTIME)
+	file(GLOB VSI_NPU_CONTRIB_SRC src/runtime/contrib/vsi_npu/vsi_npu_json.cc)
+	list(APPEND RUNTIME_SRCS ${VSI_NPU_CONTRIB_SRC})
+	message(STATUS "Build with VSI NPU runtime: " ${EXTERN_LIBRARY_DNNL})
+
+elseif(USE_VSI_NPU STREQUAL "C_SRC")
 	file(GLOB VSI_NPU_RELAY_CONTRIB_SRC src/relay/backend/contrib/vsi_npu/codegen_vsi_npu.cc)
 	list(APPEND COMPILER_SRCS ${VSI_NPU_RELAY_CONTRIB_SRC})
 	message(STATUS "Build with VSI NPU support ...")
-endif(USE_VSI_NPU)
 
 if(USE_VSI_NPU_RUNTIME)
 	list(APPEND TVM_RUNTIME_LINKER_LIBS ovxlib)
@@ -27,3 +38,5 @@ if(USE_VSI_NPU_RUNTIME)
 	list(APPEND RUNTIME_SRCS ${VSI_NPU_CONTRIB_SRC})
 	message(STATUS "Build with VSI NPU runtime: " ${EXTERN_LIBRARY_DNNL})
 endif(USE_VSI_NPU_RUNTIME)
+
+endif(USE_VSI_NPU)
