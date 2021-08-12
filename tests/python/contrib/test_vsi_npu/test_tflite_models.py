@@ -32,7 +32,7 @@ from tvm.contrib.download import download_testdata
 
 from tflite_deeplab import *
 
-RPC_HOST = "10.193.20.8"
+RPC_HOST = "10.193.20.60"
 RPC_PORT = 9090
 MEASURE_PERF = False
 VERBOSE = False
@@ -72,13 +72,19 @@ def add_supported_model(name, where, is_quant=False, formats='tgz',
 
 def init_supported_models():
     QUANT = True
+    where = "https://storage.googleapis.com/tfhub-lite-models/tensorflow/lite-model/ssd_mobilenet_v1/1/metadata/1.tflite"
+    m = add_supported_model("ssd_mobilenet_v1", "", QUANT, formats="tflite")
+    m.url = where
+    m.inputs = "normalized_input_image_tensor"
+    m.input_size = 300
+
     where = "http://download.tensorflow.org/models/object_detection"
     m = add_supported_model("ssd_mobilenet_v3", where, formats='tar.gz', suffix="_small_coco_2020_01_14")
     m.input_size = 320
     m.is_quant = True
     m.inputs = 'normalized_input_image_tensor'
 
-    where = "http://10.192.208.75/images/deepview/models/float/mobilenet_ssd_v1"
+    where = "http://10.192.208.75/images/gf/tvm"
     m = add_supported_model("mobilenet_ssd_v1_trimmed_converted", where, formats='tflite')
     m.input_size = 300
     m.inputs = 'Preprocessor/sub'

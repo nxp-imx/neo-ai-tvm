@@ -83,6 +83,16 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
 
   /*!
    * \brief A series of operators that form a composite
+   * sigmoid layer. Supports qnn.sigmoid.
+   */
+  struct CompositeQnnSigmoidNode {
+    const CallNode* dequantize = nullptr;
+    const CallNode* sigmoid = nullptr;
+    const CallNode* quantize = nullptr;
+  };
+
+  /*!
+   * \brief A series of operators that form a composite
    * avg pool2d layer. Supports both qnn.avg_pool2d.
    */
   struct CompositeQnnAvgPool2DNode {
@@ -145,6 +155,8 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
       json_node = CreateCompositeConvJSONNode(cn);
     } else if (name == "vsi_npu.qnn_softmax") {
       json_node = CreateCompositeQnnSoftmaxJSONNode(cn);
+    } else if (name == "vsi_npu.qnn_sigmoid") {
+      json_node = CreateCompositeQnnSigmoidJSONNode(cn);
     } else if (name == "vsi_npu.qnn_avg_pool2d") {
       json_node = CreateCompositeAvgPool2DJSONNode(cn);
     } else {
@@ -165,6 +177,23 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
 
     auto json_node = std::make_shared<JSONGraphNode>(name, "kernel", inputs, 1);
     SetCallNodeAttribute(json_node, nodes.avg_pool2d);
+    return json_node;
+  }
+
+  std::shared_ptr<JSONGraphNode> CreateCompositeQnnSigmoidJSONNode(const CallNode* cn) {
+    CompositeQnnSigmoidNode nodes = UnpackCompositeQnnSigmoid(cn);
+    std::string name = "qnn.sigmoid";
+
+    // Inputs must be added in the same order they appear in the relay graph.
+    std::vector<JSONGraphNodeEntry> inputs;
+    inputs.push_back(VisitExpr(cn->args[0])[0]);
+    inputs.push_back(VisitExpr(nodes.dequantize->args[1])[0]);  // input scale
+    inputs.push_back(VisitExpr(nodes.dequantize->args[2])[0]);  // input zero-point
+    inputs.push_back(VisitExpr(nodes.quantize->args[1])[0]);  // output scale
+    inputs.push_back(VisitExpr(nodes.quantize->args[2])[0]);  // output zero-point
+
+    auto json_node = std::make_shared<JSONGraphNode>(name, "kernel", inputs, 1);
+    SetCallNodeAttribute(json_node, nodes.sigmoid);
     return json_node;
   }
 
@@ -316,6 +345,30 @@ class VsiNpuJSONSerializer : public backend::contrib::JSONSerializer {
     current_call = current_call->args[0].as<CallNode>();
     CHECK(backend::IsOp(current_call, "nn.softmax"));
     nodes.softmax = current_call;
+    current_call = current_call->args[0].as<CallNode>();
+    CHECK(backend::IsOp(current_call, "qnn.dequantize"));
+    nodes.dequantize = current_call;
+    return nodes;
+  }
+
+  /*!
+   * \brief Extract qnn.sigmoid nodes from a composite function.
+   *
+   * \param cn The call node of the composite function.
+   * \return Extracted composite convolution nodes.
+   */
+  static CompositeQnnSigmoidNode UnpackCompositeQnnSigmoid(const CallNode* cn) {
+    CompositeQnnSigmoidNode nodes{};
+    const auto* fn = cn->op.as<FunctionNode>();
+    CHECK(fn);
+
+    // Traverse composite dense function from child to parent
+    const auto* current_call = fn->body.as<CallNode>();
+    CHECK(backend::IsOp(current_call, "qnn.quantize"));
+    nodes.quantize = current_call;
+    current_call = current_call->args[0].as<CallNode>();
+    CHECK(backend::IsOp(current_call, "sigmoid"));
+    nodes.sigmoid = current_call;
     current_call = current_call->args[0].as<CallNode>();
     CHECK(backend::IsOp(current_call, "qnn.dequantize"));
     nodes.dequantize = current_call;

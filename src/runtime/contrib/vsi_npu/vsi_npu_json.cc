@@ -48,6 +48,7 @@
 #include "tim/vx/ops/split.h"
 #include "tim/vx/ops/stridedslice.h"
 #include "tim/vx/ops/reduce.h"
+#include "tim/vx/ops/simple_operations.h"
 
 #include "vsi_utils.h"
 #endif
@@ -121,7 +122,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 	  Reshape(nid);
         } else if ("nn.dense" == op_name or "qnn.dense" == op_name) {
 	  Dense(nid);
-        } else if ("nn.relu" == op_name or "sigmoid" == op_name) {
+        } else if ("nn.relu" == op_name or "sigmoid" == op_name or "qnn.sigmoid" == op_name) {
           Activation(nid);
         } else if ("nn.softmax" == op_name || "qnn.softmax" == op_name) {
           Softmax(nid);
@@ -152,6 +153,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
           StridedSlice(nid);
         } else if ("mean" == op_name) {
           Reduce(nid);
+        } else if ("qnn.dequantize" == op_name) {
+          DataConvert(nid);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -266,21 +269,25 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto node = nodes_[nid];
     auto op_name = node.GetOpName();
     //JSONGraphNodeEntry input
-    auto data_entry = node.GetInputs()[0];
+    auto inputs = node.GetInputs();
 
     JSONGraphNodeEntry out_entry(nid, 0);
 
     std::shared_ptr<tim::vx::Tensor> vsi_input;
     std::shared_ptr<tim::vx::Tensor> vsi_output;
 
-    vsi_input = MakeVSITensorFromJSONEntry(data_entry);
-
-    vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+    if (inputs.size() == 5) {
+      vsi_input = MakeVSITensorFromJSONEntry(inputs[0], &inputs[1], &inputs[2]);
+      vsi_output = MakeVSITensorFromJSONEntry(out_entry, &inputs[3], &inputs[4]);
+    } else {
+      vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
+      vsi_output = MakeVSITensorFromJSONEntry(out_entry);
+    }
 
     std::shared_ptr<tim::vx::Operation> _op;
     if ("nn.relu" == op_name) {
       _op = graph_->CreateOperation<tim::vx::ops::Relu>();
-    } else if ("sigmoid" == op_name){
+    } else if ("sigmoid" == op_name or "qnn.sigmoid" == op_name){
       _op = graph_->CreateOperation<tim::vx::ops::Sigmoid>();
     }
     (*_op).BindInput(vsi_input).BindOutput(vsi_output);
@@ -336,9 +343,19 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
 
     JSONGraphNodeEntry out_entry(nid, 0);
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
-    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
+    auto vsi_quant = vsi_input->GetQuantization();
+    auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_quant);
 
-    auto clip = graph_->CreateOperation<tim::vx::ops::Clip>(std::stof(min), std::stof(max));
+    float vsi_min = 0.0;
+    float vsi_max = 0.0;
+    if (vsi_quant.Type() == tim::vx::QuantType::NONE) {
+      vsi_min = std::stof(min);
+      vsi_max = std::stof(max);
+    } else {
+      vsi_min = (std::stof(min) - vsi_quant.ZeroPoints()[0]) * vsi_quant.Scales()[0];
+      vsi_max = (std::stof(max) - vsi_quant.ZeroPoints()[0]) * vsi_quant.Scales()[0];
+    }
+    auto clip = graph_->CreateOperation<tim::vx::ops::Clip>(vsi_min, vsi_max);
     (*clip).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(clip);
   }
@@ -424,6 +441,20 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto op = graph_->CreateOperation<tim::vx::ops::ReduceMean>(vx_axis, vx_keepdims);
     (*op).BindInput(vsi_input).BindOutput(vsi_output);
     ops_.push_back(op);
+  }
+
+  void DataConvert(const size_t& nid) {
+    auto node = nodes_[nid];
+    auto inputs = node.GetInputs();
+
+    JSONGraphNodeEntry out_entry(nid, 0);
+    auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0], &inputs[1], &inputs[2]);
+    auto vsi_output =  MakeVSITensorFromJSONEntry(out_entry);
+
+    auto op = graph_->CreateOperation<tim::vx::ops::DataConvert>();
+    (*op).BindInput(vsi_input).BindOutput(vsi_output);
+    ops_.push_back(op);
+
   }
 
   void Permute(const size_t& nid) {

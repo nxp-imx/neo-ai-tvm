@@ -84,6 +84,7 @@ _register_external_op_helper("transpose")
 _register_external_op_helper("split")
 _register_external_op_helper("strided_slice")
 _register_external_op_helper("mean")
+#_register_external_op_helper("qnn.dequantize")
 
 
 @tvm.ir.register_op_attr("layout_transform", "target.vsi_npu")
@@ -172,12 +173,19 @@ def vsi_npu_pattern_table():
         pattern = is_op("qnn.quantize")(pattern, is_constant(), is_constant())
         return pattern
 
+    def qnn_sigmoid_pattern():
+        pattern = is_op("qnn.dequantize")(wildcard(), is_constant(), is_constant())
+        pattern = is_op("sigmoid")(pattern)
+        pattern = is_op("qnn.quantize")(pattern, is_constant(), is_constant())
+        return pattern
+
     vsi_npu_patterns = [
             ("vsi_npu.dense", dense_pattern()),
             ("vsi_npu.conv2d", conv_pattern()),
             ("vsi_npu.qnn_dense", qnn_dense_pattern()),
             ("vsi_npu.qnn_conv2d", qnn_conv_pattern()),
             ("vsi_npu.qnn_softmax", qnn_softmax_pattern()),
+            ("vsi_npu.qnn_sigmoid", qnn_sigmoid_pattern()),
             ("vsi_npu.qnn_avg_pool2d", qnn_avg_pool2d_pattern()),
             ]
     return vsi_npu_patterns
