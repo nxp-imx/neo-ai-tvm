@@ -74,13 +74,14 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     // Setup constants entries for weights.
     SetupConstants(consts);
 
-    CHECK_EQ(consts.size(), const_idx_.size())
+    ICHECK_EQ(consts.size(), const_idx_.size())
         << "The number of input constants must match the number of required.";
 
     BuildEngine();
   }
 
   void Run() override {
+    bool ret;
     for (size_t i = 0; i < input_nodes_.size(); ++i) {
       auto nid = input_nodes_[i];
       uint32_t eid = EntryID(nid, 0);
@@ -92,30 +93,34 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         for (int j = 0; j < data_entry_[eid]->ndim; j++) {
           data_size *= data_entry_[eid]->shape[j];
         }
-        assert(vsi_tensor->CopyDataToTensor(data, data_size));
+        ret = vsi_tensor->CopyDataToTensor(data, data_size);
+        ICHECK(ret) << "Copy data to tensor failed.";
       }
     }
 
-    assert(graph_->Run());
+    ret = graph_->Run();
+    ICHECK(ret) << "Graph run failed.";
 
     for (size_t i = 0; i < outputs_.size(); ++i) {
       uint32_t eid = EntryID(outputs_[i]);
       void* data = data_entry_[eid]->data;
 
       auto vsi_tensor = entry_out_tensor_[eid];
-      vsi_tensor->CopyDataFromTensor(data);
+      ret = vsi_tensor->CopyDataFromTensor(data);
+      ICHECK(ret) << "Copy data from tensor failed.";
     }
   }
  private:
 
   void BuildEngine() {
+    bool ret;
     context_ = tim::vx::Context::Create();
     graph_ = context_->CreateGraph();
 
     for (size_t nid = 0; nid < nodes_.size(); ++nid) {
       const auto& node = nodes_[nid];
       if (node.GetOpType() == "kernel") {
-        CHECK_EQ(node.GetOpType(), "kernel");
+        ICHECK_EQ(node.GetOpType(), "kernel");
         auto op_name = node.GetOpName();
 	LOG(INFO) << "Build op: " << op_name;
         if ("nn.batch_flatten" == op_name or "reshape" == op_name) {
@@ -160,7 +165,8 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         }
       }
     }
-    assert(graph_->Compile());
+    ret = graph_->Compile();
+    ICHECK(ret) << "Build graph failed.";
     LOG(INFO) << "Build graph successfully" << std::endl;
   }
 
@@ -169,7 +175,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     JSONGraphNodeEntry out_entry(nid, 0);
     std::vector<JSONGraphNodeEntry> inputs = node.GetInputs();
 
-    CHECK(inputs.size() == 1U) << "Flatten layer requires 1 inputs.";
+    ICHECK(inputs.size() == 1U) << "Flatten layer requires 1 inputs.";
 
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
     auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
@@ -210,7 +216,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       align_corners = 1;
     }
 
-    CHECK(inputs.size() == 1U) << "Resize layer requires 1 inputs.";
+    ICHECK(inputs.size() == 1U) << "Resize layer requires 1 inputs.";
 
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
     auto vsi_output = MakeVSITensorFromJSONEntry(out_entry, vsi_input->GetQuantization());
@@ -219,7 +225,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
         vsi_input = PermuteVsiTensor(vsi_input, {1, 2, 0, 3}, true);
         vsi_output = PermuteVsiTensor(vsi_output, {2, 0, 1, 3}, false);
     } else {
-        CHECK(layout == "NCHW") << "Resize layer requires 1 inputs.";
+        ICHECK(layout == "NCHW") << "Resize layer requires 1 inputs.";
     }
 
     auto resize = graph_->CreateOperation<tim::vx::ops::Resize>(vsi_type, 0, align_corners,
@@ -241,7 +247,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     bool has_bias;
     if (node.GetOpName() == "qnn.dense") {
       //qnn.densn
-      CHECK(num_inputs >= 10U && num_inputs <= 11U)
+      ICHECK(num_inputs >= 10U && num_inputs <= 11U)
           << "Quantized convolution requires 11 inputs with a bias, 9 inputs without.";
       has_bias = num_inputs == 11;
       vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0], &inputs[4], &inputs[2]));
@@ -251,7 +257,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       }
       vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry, &inputs[6 + has_bias], &inputs[7 + has_bias]));
     } else {
-      CHECK(num_inputs >= 2U && num_inputs <= 3U)
+      ICHECK(num_inputs >= 2U && num_inputs <= 3U)
           << "Fully connected (dense) layer requires 3 inputs with a bias, 2 inputs without.";
       for (const auto& i : inputs) {
         vsi_inputs.push_back(MakeVSITensorFromJSONEntry(i));
@@ -299,7 +305,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto op_name = node.GetOpName();
     auto inputs = node.GetInputs();
 
-    CHECK(inputs.size() >= 2U) << "BatchNormal layer requires at least 2 inputs.";
+    ICHECK(inputs.size() >= 2U) << "BatchNormal layer requires at least 2 inputs.";
 
     JSONGraphNodeEntry out_entry(nid, 0);
     std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_inputs;
@@ -339,7 +345,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::string min = node.GetAttr<std::vector<std::string>>("a_min")[0];
     std::string max = node.GetAttr<std::vector<std::string>>("a_max")[0];
 
-    CHECK(inputs.size() == 1U) << "Clip layer requires 1 input.";
+    ICHECK(inputs.size() == 1U) << "Clip layer requires 1 input.";
 
     JSONGraphNodeEntry out_entry(nid, 0);
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
@@ -369,7 +375,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto shape_tvm = nodes_[inputs[0].id_].GetOpShape()[inputs[0].index_];
     auto vx_axis = ConvertAxis(tvm_axis, shape_tvm.size());
 
-    CHECK((uint32_t)slices_num == outputs_num) << "Split layer slices number doesn't match outputs number.";
+    ICHECK((uint32_t)slices_num == outputs_num) << "Split layer slices number doesn't match outputs number.";
 
     auto vsi_input = MakeVSITensorFromJSONEntry(inputs[0]);
     std::vector<std::shared_ptr<tim::vx::Tensor>> vsi_outputs;
@@ -392,7 +398,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     auto end = node.GetAttr<std::vector<std::string>>("end");
     auto strides = node.GetAttr<std::vector<std::string>>("strides");
 
-    CHECK(begin.size() == end.size()) << "StridedSlice layer 'begin' dim number doesn't match 'end' dim number.";
+    ICHECK(begin.size() == end.size()) << "StridedSlice layer 'begin' dim number doesn't match 'end' dim number.";
     std::vector<int32_t> vx_begin;
     std::vector<int32_t> vx_end;
     std::vector<int32_t> vx_stride;
@@ -501,7 +507,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
      * inputs[4]: moving_var
      */
 
-    CHECK(inputs.size() == 5U) << "BatchNormal layer requires 5 inputs.";
+    ICHECK(inputs.size() == 5U) << "BatchNormal layer requires 5 inputs.";
 
     JSONGraphNodeEntry out_entry(nid, 0);
 
@@ -633,7 +639,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     std::shared_ptr<tim::vx::Tensor> vsi_input;
     std::shared_ptr<tim::vx::Tensor> vsi_output;
     std::cout << "inputs.size" << inputs.size() << std::endl;
-    CHECK(inputs.size() == 1U || inputs.size() == 5U)
+    ICHECK(inputs.size() == 1U || inputs.size() == 5U)
           << "Softmax requires 5 inputs with quantization, 1 inputs without.";
     if (inputs.size() == 5) {
       vsi_input = MakeVSITensorFromJSONEntry(inputs[0], &inputs[1], &inputs[2]);
@@ -739,14 +745,14 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
     if (groups == data_shape[1] && groups == weight_shape[0] && groups != 1) {
       vsi_multiplier = static_cast<int32_t>(weight_shape[1]);
       if (channels != vsi_multiplier) {
-          CHECK(channels == weight_shape[0] * weight_shape[1]) << "Invalid channels for depthwise conv2d.";
+          ICHECK(channels == weight_shape[0] * weight_shape[1]) << "Invalid channels for depthwise conv2d.";
 	  weight_shape[0] = 1;
 	  weight_shape[1] = channels;
       }
     }
 
     if (node.GetOpName() == "qnn.conv2d") {
-      CHECK(num_inputs >= 10U && num_inputs <= 11U)
+      ICHECK(num_inputs >= 10U && num_inputs <= 11U)
           << "Quantized convolution requires 11 inputs with a bias, 9 inputs without.";
       has_bias = num_inputs == 11;
       vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0], &inputs[4], &inputs[2]));
@@ -756,7 +762,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       }
       vsi_outputs.push_back(MakeVSITensorFromJSONEntry(out_entry, &inputs[6 + has_bias], &inputs[7 + has_bias]));
     } else {
-      CHECK(num_inputs >= 2U && num_inputs <= 3U)
+      ICHECK(num_inputs >= 2U && num_inputs <= 3U)
           << "Convolution requires 3 inputs with a bias, 2 inputs without.";
       has_bias = num_inputs == 3;
       vsi_inputs.push_back(MakeVSITensorFromJSONEntry(inputs[0]));
@@ -835,7 +841,7 @@ class VsiNpuJSONRuntime : public JSONRuntimeBase {
       auto offset_tensor = data_entry_[EntryID(*offset)];
       std::vector<float> scale_data = GetVectorFromDLTensor<float>(scale_tensor);
       std::vector<int> offset_data = GetVectorFromDLTensor<int>(offset_tensor);
-      CHECK(scale_data.size() == 1 && offset_data.size() == 1)
+      ICHECK(scale_data.size() == 1 && offset_data.size() == 1)
             << "Currently only per-layer quantization is supported in the VSI runtime.";
       vsi_quant = tim::vx::Quantization(tim::vx::QuantType::ASYMMETRIC, scale_data[0], offset_data[0]);
     }

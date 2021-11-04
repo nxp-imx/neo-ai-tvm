@@ -55,7 +55,7 @@ def _register_external_op_helper(op_name, supported=True):
     """
 
     @tvm.ir.register_op_attr(op_name, "target.vsi_npu")
-    def _func_wrapper(attrs, args):
+    def _func_wrapper(expr):
         return supported
 
     return _func_wrapper
@@ -88,8 +88,9 @@ _register_external_op_helper("mean")
 
 
 @tvm.ir.register_op_attr("layout_transform", "target.vsi_npu")
-def layout_transform(attrs, args):
+def layout_transform(expr):
     """Check if the external VSI codegen should be used."""
+    attrs, args = expr.attrs, expr.args
     if attrs.src_layout == "NHWC" and attrs.dst_layout == "NCHW" and args[0].checked_type.dtype != "uint8":
         return True
     if attrs.src_layout == "NCHW" and attrs.dst_layout == "NHWC":
